@@ -1,0 +1,397 @@
+use std::{
+    fs,
+    path::Path,
+    process::Stdio,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
+
+use anyhow::Context;
+use indicatif::ProgressBar;
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use time::{format_description::BorrowedFormatItem, macros::format_description, OffsetDateTime};
+use tracing::{debug, error, info};
+
+const GRACE_TIME: Duration = Duration::from_secs(10);
+const ARCHIVE_DATE_FORMAT: &[BorrowedFormatItem<'static>] =
+    format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+
+enum BackupRequest {
+    CreateBackup { archive_name: String },
+    RestoreBackup { archive_name: String },
+}
+
+pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Result<(), anyhow::Error> {
+    let file_name = format!("{name}.toml");
+    let file_path = game_config_path.join(&file_name);
+
+    // Read game config
+    let gcfg = crate::config::game::GameConfig::from_file(&file_path)?;
+
+    let path = &gcfg.save_path;
+    let output_path = data_path.join(name);
+
+    let staging_path = output_path.join("staging");
+    let backup_path = output_path.join("backups");
+
+    info!("Watching and backing up: {}", path.display());
+
+    let last_backup_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    let last_change_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+
+    let mp = indicatif::MultiProgress::new();
+
+    // Cancellation boolean.
+    let cancel = Arc::new(AtomicBool::new(false));
+
+    // Set break (Ctrl-C) handler.
+    ctrlc::set_handler({
+        let cancel = Arc::clone(&cancel);
+
+        move || {
+            info!("Cancellation requested by user.");
+            cancel.store(true, Ordering::SeqCst);
+        }
+    })
+    .unwrap_or_else(|err| error!("Error setting Ctrl-C handler: {}", err));
+
+    let (backup_tx, backup_rx) = std::sync::mpsc::channel::<BackupRequest>();
+
+    // Backup thread
+    // Ensures that multiple backups cannot run simultaneously
+    let backup_join_handle = {
+        let path = path.to_owned();
+        let staging_path = staging_path.to_owned();
+        let backup_path = backup_path.to_owned();
+
+        let last_backup_at = last_backup_at.clone();
+        let last_change_at = last_change_at.clone();
+
+        let mp = mp.clone();
+
+        std::thread::spawn(move || {
+            for backup_request in &backup_rx {
+                let res: Result<(), anyhow::Error> = (|| {
+                    let now = Instant::now();
+
+                    {
+                        let mut last_backup_at = last_backup_at.lock().unwrap();
+                        *last_backup_at = Some(now);
+                    }
+
+                    match backup_request {
+                        BackupRequest::CreateBackup { archive_name } => {
+                            let archive_path = backup_path.join(&archive_name);
+
+                            if !path.exists() {
+                                error!("Path does not exist: {}", path.display());
+                                return Ok(());
+                            }
+
+                            let pb = mp.add(ProgressBar::new_spinner().with_message("Syncing staging directory"));
+
+                            // Update staging directory
+                            rclone_sync(&path, &staging_path)?;
+
+                            pb.finish_and_clear();
+
+                            let pb = mp.add(ProgressBar::new_spinner().with_message("Compressing archive"));
+
+                            // Create backup archive
+                            create_archive(&path, &archive_path)?;
+
+                            pb.finish_and_clear();
+
+                            info!("Backup created: {archive_name}");
+                        }
+                        BackupRequest::RestoreBackup { archive_name } => {
+                            let archive_path = backup_path.join(archive_name);
+
+                            if !archive_path.exists() {
+                                error!("Archive does not exist: {}", archive_path.display());
+                                return Ok(());
+                            }
+
+                            // Remove staging directory if it exists
+                            if staging_path.exists() {
+                                fs::remove_dir_all(&staging_path)?;
+                            }
+
+                            // Create new empty staging directory
+                            fs::create_dir_all(&staging_path)?;
+
+                            let pb = mp.add(ProgressBar::new_spinner().with_message("Unpacking archive"));
+
+                            // Unpack archive to be restored into staging directory
+                            unpack_archive(&archive_path, &staging_path)?;
+
+                            pb.finish_and_clear();
+
+                            let pb = mp.add(ProgressBar::new_spinner().with_message("Syncing to save directory"));
+
+                            // Sync restored staging directory back to save directory
+                            rclone_sync(&staging_path, &path)?;
+
+                            pb.finish_and_clear();
+
+                            // Clear change tracker, to avoid restore triggering automatic backup
+                            let mut last_change_at = last_change_at.lock().unwrap();
+                            *last_change_at = None;
+                        }
+                    }
+
+                    Ok(())
+                })();
+
+                if let Err(err) = res {
+                    error!("{err}");
+                }
+            }
+        })
+    };
+
+    // Auto-backup thread
+    let autobackup_join_handle = {
+        let cancel = Arc::clone(&cancel);
+
+        let interval = Duration::from_secs(gcfg.backup_interval);
+
+        let last_backup_at = last_backup_at.clone();
+        let last_change_at = last_change_at.clone();
+
+        let backup_tx = backup_tx.clone();
+
+        std::thread::spawn(move || loop {
+            if cancel.load(Ordering::SeqCst) {
+                break;
+            }
+
+            std::thread::sleep(Duration::from_secs(1));
+
+            let now = Instant::now();
+
+            {
+                let mut last_backup_at = last_backup_at.lock().unwrap();
+                if let Some(last_backup_at) = last_backup_at.as_ref() {
+                    if now < (*last_backup_at + interval) {
+                        continue;
+                    }
+                }
+
+                {
+                    let mut last_change_at = last_change_at.lock().unwrap();
+
+                    let Some(is_grace_over) = last_change_at.map(|lca| lca < (now - GRACE_TIME)) else {
+                        continue;
+                    };
+
+                    if !is_grace_over {
+                        continue;
+                    }
+
+                    *last_change_at = None;
+                }
+
+                *last_backup_at = Some(now);
+            }
+
+            info!("Creating auto-backup");
+
+            let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+            let archive_name = format!("Auto {}.7z", now.format(ARCHIVE_DATE_FORMAT).unwrap());
+
+            backup_tx.send(BackupRequest::CreateBackup { archive_name }).unwrap();
+        })
+    };
+
+    // Watch save directory for changes
+    let (watcher_join_handle, watcher) = {
+        let cancel = Arc::clone(&cancel);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
+
+        watcher.watch(path, RecursiveMode::Recursive)?;
+
+        let join_handle = std::thread::spawn(move || {
+            for result in &rx {
+                if cancel.load(Ordering::SeqCst) {
+                    break;
+                }
+
+                match result {
+                    Ok(event) => {
+                        debug!("Event {event:?}");
+
+                        if event.kind.is_access() {
+                            continue;
+                        }
+
+                        let mut last_change_at = last_change_at.lock().unwrap();
+                        *last_change_at = Some(Instant::now())
+                    }
+                    Err(error) => error!("Error {error:?}"),
+                }
+            }
+        });
+
+        (join_handle, watcher)
+    };
+
+    // Interactive prompt
+
+    let create_manual_backup = || -> Result<(), anyhow::Error> {
+        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let default_name = format!("Manual {}", now.format(ARCHIVE_DATE_FORMAT).unwrap());
+
+        let name: String = dialoguer::Input::new()
+            .with_prompt("Backup name")
+            .default(default_name)
+            .interact_text()?;
+
+        let archive_name = format!("{name}.7z");
+
+        backup_tx.send(BackupRequest::CreateBackup { archive_name })?;
+
+        Ok(())
+    };
+
+    let restore_backup = || -> Result<(), anyhow::Error> {
+        let backup_files = fs::read_dir(&backup_path)?;
+        let mut backup_files: Vec<_> = backup_files
+            .filter_map(Result::ok)
+            .filter_map(|e| {
+                let path = e.path();
+
+                if !path.is_file() || !matches!(path.extension(), Some(ext) if ext == "7z") {
+                    return None;
+                }
+
+                let metadata = path.metadata().unwrap();
+                let modified = metadata.modified().unwrap();
+
+                Some((path, modified))
+            })
+            .collect();
+
+        backup_files.sort_by_key(|(_, v)| *v);
+        backup_files.reverse();
+        backup_files.truncate(20);
+
+        let backup_items: Vec<_> = backup_files
+            .iter()
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy())
+            .chain(["...".into()])
+            .collect();
+
+        let Some(selected_ix) = dialoguer::Select::new()
+            .with_prompt("Backup to restore")
+            .items(&backup_items)
+            .interact_opt()?
+        else {
+            return Ok(());
+        };
+
+        let archive_name: String = if selected_ix < backup_items.len() - 1 {
+            backup_items
+                .get(selected_ix)
+                .context("Getting selected backup item by index")?
+                .clone()
+                .into_owned()
+        } else {
+            dialoguer::Input::new()
+                .with_prompt("Name of archive to restore")
+                .allow_empty(true)
+                .interact_text()?
+        };
+
+        if archive_name.is_empty() {
+            return Ok(());
+        }
+
+        info!("Restoring backup from archive: {archive_name}");
+
+        backup_tx.send(BackupRequest::RestoreBackup { archive_name })?;
+
+        Ok(())
+    };
+
+    loop {
+        eprintln!();
+
+        let Ok(choice) = dialoguer::Select::new()
+            .default(0)
+            .item("Create backup") // 0
+            .item("Restore backup") // 0
+            .item("Exit") // 1
+            .interact_opt()
+        else {
+            break;
+        };
+
+        dialoguer::console::Term::stderr().clear_screen()?;
+
+        let Some(choice) = choice else {
+            continue;
+        };
+
+        match choice {
+            0 => create_manual_backup()?,
+            1 => restore_backup()?,
+            2 => break,
+            _ => {}
+        }
+    }
+
+    info!("Shutting down...");
+
+    // Signal cancellation
+    cancel.store(true, Ordering::SeqCst);
+
+    drop(watcher);
+    drop(backup_tx);
+
+    watcher_join_handle.join().unwrap();
+    autobackup_join_handle.join().unwrap();
+    backup_join_handle.join().unwrap();
+
+    mp.clear()?;
+
+    Ok(())
+}
+
+fn rclone_sync(src: &Path, dst: &Path) -> Result<(), anyhow::Error> {
+    std::process::Command::new("rclone")
+        .arg("sync")
+        .arg(src)
+        .arg(dst)
+        .status()?;
+
+    Ok(())
+}
+
+fn create_archive(src: &Path, archive_path: &Path) -> Result<(), anyhow::Error> {
+    std::process::Command::new("7z")
+        .current_dir(src)
+        .args(["a", "-mx9"])
+        .arg(archive_path)
+        .arg(".")
+        .stdout(Stdio::null())
+        .status()?;
+
+    Ok(())
+}
+
+fn unpack_archive(archive_path: &Path, dst: &Path) -> Result<(), anyhow::Error> {
+    std::process::Command::new("7z")
+        .current_dir(dst)
+        .arg("x")
+        .arg(archive_path)
+        .stdout(Stdio::null())
+        .status()?;
+
+    Ok(())
+}

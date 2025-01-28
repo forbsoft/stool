@@ -1,0 +1,21 @@
+[package]
+name = "stool"
+version = "0.1.0"
+edition = "2021"
+authors = ["Forb.Jok <forbjok@proton.me>"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0.95"
+clap = { version = "4.5.27", features = ["derive"] }
+ctrlc = "3.4.5"
+dialoguer = "0.11.0"
+dirs = "6.0.0"
+indicatif = "0.17.11"
+notify = "8.0.0"
+serde = "1.0.217"
+serde_derive = "1.0.217"
+time = { version = "0.3.37", features = ["formatting", "local-offset", "macros"] }
+toml = "0.8.19"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
