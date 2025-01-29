@@ -15,7 +15,6 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use time::{format_description::BorrowedFormatItem, macros::format_description, OffsetDateTime};
 use tracing::{debug, error, info, warn};
 
-const GRACE_TIME: Duration = Duration::from_secs(10);
 const ARCHIVE_DATE_FORMAT: &[BorrowedFormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
 
@@ -64,6 +63,8 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
         let staging_path = staging_path.to_owned();
         let backup_path = backup_path.to_owned();
 
+        let grace_time = Duration::from_secs(gcfg.grace_time);
+
         let last_backup_at = last_backup_at.clone();
         let last_change_at = last_change_at.clone();
 
@@ -76,6 +77,20 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
                     match backup_request {
                         BackupRequest::CreateBackup { archive_name } => {
+                            // Heed grace time
+                            {
+                                let mut last_change_at = last_change_at.lock().unwrap();
+
+                                if let Some(time_since_last_change) = last_change_at.map(|lca| now - lca) {
+                                    if time_since_last_change < grace_time {
+                                        std::thread::sleep(grace_time - time_since_last_change);
+                                    }
+                                }
+
+                                *last_change_at = None;
+                            }
+
+                            // Update last_backup_at
                             {
                                 let mut last_backup_at = last_backup_at.lock().unwrap();
                                 *last_backup_at = Some(now);
@@ -189,12 +204,14 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
     let autobackup_join_handle = {
         let cancel = Arc::clone(&cancel);
 
-        let interval = Duration::from_secs(gcfg.backup_interval);
+        let backup_interval = Duration::from_secs(gcfg.backup_interval);
 
         let last_backup_at = last_backup_at.clone();
         let last_change_at = last_change_at.clone();
 
         let backup_tx = backup_tx.clone();
+
+        let mut last_autobackup_at: Option<Instant> = None;
 
         std::thread::spawn(move || loop {
             if cancel.load(Ordering::SeqCst) {
@@ -206,29 +223,27 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
             let now = Instant::now();
 
             {
-                let mut last_backup_at = last_backup_at.lock().unwrap();
-                if let Some(last_backup_at) = last_backup_at.as_ref() {
-                    if now < (*last_backup_at + interval) {
+                let last_backup_at = last_backup_at.lock().unwrap();
+                let last_change_at = last_change_at.lock().unwrap();
+
+                let Some(last_change_at) = *last_change_at else {
+                    continue;
+                };
+
+                if let Some(last_autobackup_at) = last_autobackup_at {
+                    if last_autobackup_at >= last_change_at {
                         continue;
                     }
                 }
 
-                {
-                    let mut last_change_at = last_change_at.lock().unwrap();
-
-                    let Some(is_grace_over) = last_change_at.map(|lca| lca < (now - GRACE_TIME)) else {
-                        continue;
-                    };
-
-                    if !is_grace_over {
+                if let Some(last_backup_at) = *last_backup_at {
+                    if now < (last_backup_at + backup_interval) {
                         continue;
                     }
-
-                    *last_change_at = None;
                 }
-
-                *last_backup_at = Some(now);
             }
+
+            last_autobackup_at = Some(now);
 
             info!("Creating auto-backup");
 

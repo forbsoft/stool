@@ -45,9 +45,15 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
         .default(600)
         .interact_text()?;
 
+    let grace_time: u64 = dialoguer::Input::new()
+        .with_prompt("Grace time (seconds)")
+        .default(10)
+        .interact_text()?;
+
     let game_config = GameConfig {
         save_paths,
         backup_interval,
+        grace_time,
     };
 
     fs::create_dir_all(game_config_path)?;

@@ -18,6 +18,7 @@ pub struct GameSavePath {
 pub struct GameConfig {
     pub save_paths: HashMap<String, GameSavePath>,
     pub backup_interval: u64,
+    pub grace_time: u64,
 }
 
 impl GameConfig {
