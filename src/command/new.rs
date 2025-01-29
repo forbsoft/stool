@@ -1,9 +1,10 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
 
-use crate::config::game::GameConfig;
+use crate::config::game::{GameConfig, GameSavePath};
 
 pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
     let name: String = dialoguer::Input::new().with_prompt("Name").interact_text()?;
@@ -14,17 +15,38 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
         return Err(anyhow::anyhow!("Game config '{name}' already exists"));
     }
 
-    let save_path: PathBuf = dialoguer::Input::<String>::new()
-        .with_prompt("Save path")
-        .interact_text()?
-        .into();
+    let mut save_paths: HashMap<String, GameSavePath> = HashMap::new();
+
+    loop {
+        let name: String = dialoguer::Input::new()
+            .with_prompt("Add save path name (blank to proceed without adding)")
+            .allow_empty(true)
+            .interact_text()?;
+
+        if name.is_empty() {
+            if save_paths.is_empty() {
+                eprintln!("At least one save path is required.");
+                continue;
+            }
+
+            break;
+        }
+
+        let path: PathBuf = dialoguer::Input::<String>::new()
+            .with_prompt("Path")
+            .interact_text()?
+            .into();
+
+        save_paths.insert(name, GameSavePath { path });
+    }
 
     let backup_interval: u64 = dialoguer::Input::new()
         .with_prompt("Backup interval (seconds)")
+        .default(600)
         .interact_text()?;
 
     let game_config = GameConfig {
-        save_path,
+        save_paths,
         backup_interval,
     };
 

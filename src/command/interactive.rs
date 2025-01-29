@@ -13,7 +13,7 @@ use anyhow::Context;
 use indicatif::ProgressBar;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use time::{format_description::BorrowedFormatItem, macros::format_description, OffsetDateTime};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 const GRACE_TIME: Duration = Duration::from_secs(10);
 const ARCHIVE_DATE_FORMAT: &[BorrowedFormatItem<'static>] =
@@ -31,13 +31,10 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
     // Read game config
     let gcfg = crate::config::game::GameConfig::from_file(&file_path)?;
 
-    let path = &gcfg.save_path;
     let output_path = data_path.join(name);
 
     let staging_path = output_path.join("staging");
     let backup_path = output_path.join("backups");
-
-    info!("Watching and backing up: {}", path.display());
 
     let last_backup_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let last_change_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
@@ -63,7 +60,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
     // Backup thread
     // Ensures that multiple backups cannot run simultaneously
     let backup_join_handle = {
-        let path = path.to_owned();
+        let save_paths = gcfg.save_paths.clone();
         let staging_path = staging_path.to_owned();
         let backup_path = backup_path.to_owned();
 
@@ -77,31 +74,42 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                 let res: Result<(), anyhow::Error> = (|| {
                     let now = Instant::now();
 
-                    {
-                        let mut last_backup_at = last_backup_at.lock().unwrap();
-                        *last_backup_at = Some(now);
-                    }
-
                     match backup_request {
                         BackupRequest::CreateBackup { archive_name } => {
-                            let archive_path = backup_path.join(&archive_name);
-
-                            if !path.exists() {
-                                error!("Path does not exist: {}", path.display());
-                                return Ok(());
+                            {
+                                let mut last_backup_at = last_backup_at.lock().unwrap();
+                                *last_backup_at = Some(now);
                             }
 
-                            let pb = mp.add(ProgressBar::new_spinner().with_message("Syncing staging directory"));
+                            let archive_path = backup_path.join(&archive_name);
 
-                            // Update staging directory
-                            rclone_sync(&path, &staging_path)?;
+                            let pb =
+                                mp.add(ProgressBar::new(save_paths.len() as u64).with_message("Preparing to stage"));
+
+                            for (name, gsp) in save_paths.iter() {
+                                let path = &gsp.path;
+
+                                pb.set_message(format!("Staging: {name}"));
+
+                                'stage: {
+                                    if !path.exists() {
+                                        warn!("Path does not exist [{name}]: {}", path.display());
+                                        break 'stage;
+                                    }
+
+                                    // Update staging directory
+                                    rclone_sync(path, &staging_path.join(name))?;
+                                }
+
+                                pb.inc(1);
+                            }
 
                             pb.finish_and_clear();
 
                             let pb = mp.add(ProgressBar::new_spinner().with_message("Compressing archive"));
 
                             // Create backup archive
-                            create_archive(&path, &archive_path)?;
+                            create_archive(&staging_path, &archive_path)?;
 
                             pb.finish_and_clear();
 
@@ -130,16 +138,40 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
                             pb.finish_and_clear();
 
-                            let pb = mp.add(ProgressBar::new_spinner().with_message("Syncing to save directory"));
+                            // Restore save paths from staging directory
 
-                            // Sync restored staging directory back to save directory
-                            rclone_sync(&staging_path, &path)?;
+                            let pb =
+                                mp.add(ProgressBar::new(save_paths.len() as u64).with_message("Preparing to restore"));
+
+                            for (name, gsp) in save_paths.iter() {
+                                let path = &gsp.path;
+
+                                pb.set_message(format!("Restoring: {name}"));
+
+                                'restore: {
+                                    let src_path = staging_path.join(name);
+
+                                    if !src_path.exists() {
+                                        warn!("Path does not exist [{name}]: {}", src_path.display());
+                                        break 'restore;
+                                    }
+
+                                    // Update staging directory
+                                    rclone_sync(&src_path, path)?;
+                                }
+
+                                pb.inc(1);
+                            }
 
                             pb.finish_and_clear();
 
                             // Clear change tracker, to avoid restore triggering automatic backup
                             let mut last_change_at = last_change_at.lock().unwrap();
                             *last_change_at = None;
+
+                            // Set last backup timestamp to now, to prevent autobackup immediately after restore
+                            let mut last_backup_at = last_backup_at.lock().unwrap();
+                            *last_backup_at = Some(now);
                         }
                     }
 
@@ -214,7 +246,9 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
         let (tx, rx) = std::sync::mpsc::channel();
         let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
 
-        watcher.watch(path, RecursiveMode::Recursive)?;
+        for (_, gsp) in gcfg.save_paths.iter() {
+            watcher.watch(&gsp.path, RecursiveMode::Recursive)?;
+        }
 
         let join_handle = std::thread::spawn(move || {
             for result in &rx {
