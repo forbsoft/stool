@@ -258,6 +258,8 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
     let (watcher_join_handle, watcher) = {
         let cancel = Arc::clone(&cancel);
 
+        let last_change_at = last_change_at.clone();
+
         let (tx, rx) = std::sync::mpsc::channel();
         let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
 
@@ -397,12 +399,33 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
     info!("Shutting down...");
 
+    'exit_backup: {
+        let last_backup_at = last_backup_at.lock().unwrap();
+        let last_change_at = last_change_at.lock().unwrap();
+
+        let Some(last_change_at) = *last_change_at else {
+            break 'exit_backup;
+        };
+
+        if let Some(last_backup_at) = *last_backup_at {
+            if last_backup_at > last_change_at {
+                break 'exit_backup;
+            }
+        }
+
+        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let archive_name = format!("Exit {}.7z", now.format(ARCHIVE_DATE_FORMAT).unwrap());
+
+        backup_tx.send(BackupRequest::CreateBackup { archive_name })?;
+    }
+
     // Signal cancellation
     cancel.store(true, Ordering::SeqCst);
 
     drop(watcher);
     drop(backup_tx);
 
+    // Wait for threads to complete
     watcher_join_handle.join().unwrap();
     autobackup_join_handle.join().unwrap();
     backup_join_handle.join().unwrap();
