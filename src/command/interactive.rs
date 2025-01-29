@@ -16,7 +16,7 @@ use time::{format_description::BorrowedFormatItem, macros::format_description, O
 use tracing::{debug, error, info, warn};
 
 const ARCHIVE_DATE_FORMAT: &[BorrowedFormatItem<'static>] =
-    format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+    format_description!("[year]-[month]-[day] [hour]-[minute]-[second]");
 
 enum BackupRequest {
     CreateBackup { archive_name: String },
