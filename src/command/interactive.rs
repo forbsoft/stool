@@ -132,6 +132,8 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                                 std::thread::sleep(grace_time_left);
                             }
 
+                            info!("Creating backup: {archive_name}");
+
                             let now = Instant::now();
 
                             // Update last_backup_at
@@ -178,12 +180,14 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                             info!("Backup created: {archive_name}");
                         }
                         BackupRequest::RestoreBackup { archive_name } => {
-                            let archive_path = backup_path.join(archive_name);
+                            let archive_path = backup_path.join(&archive_name);
 
                             if !archive_path.exists() {
                                 error!("Archive does not exist: {}", archive_path.display());
                                 return Ok(());
                             }
+
+                            info!("Restoring backup from archive: {archive_name}");
 
                             // Remove staging directory if it exists
                             if staging_path.exists() {
@@ -227,6 +231,8 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                             }
 
                             pb.finish_and_clear();
+
+                            info!("Backup restored: {archive_name}");
 
                             let now = Instant::now();
 
@@ -425,8 +431,6 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
         if archive_name.is_empty() {
             return Ok(());
         }
-
-        info!("Restoring backup from archive: {archive_name}");
 
         backup_tx.send(BackupRequest::RestoreBackup { archive_name })?;
 
