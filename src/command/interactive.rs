@@ -75,22 +75,41 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
         std::thread::spawn(move || {
             for backup_request in &backup_rx {
                 let res: Result<(), anyhow::Error> = (|| {
-                    let now = Instant::now();
-
                     match backup_request {
                         BackupRequest::CreateBackup { archive_name } => {
-                            // Heed grace time
-                            {
-                                let mut last_change_at = last_change_at.lock().unwrap();
+                            // Wait for grace time to elapse.
+                            // The purpose of this is to avoid creating backup while files are still
+                            // in the middle of being updated. How long grace time is needed
+                            // would depend on the game and how long it takes to finish writing its changes,
+                            // but in general at least some grace time should always be used.
+                            // Any change detected will reset grace time.
+                            // Only when grace time has elapsed with no new changes detected in the meantime
+                            // should the backup proceed.
+                            loop {
+                                let grace_time_left = 'gtl: {
+                                    let now = Instant::now();
 
-                                if let Some(time_since_last_change) = last_change_at.map(|lca| now - lca) {
-                                    if time_since_last_change < grace_time {
-                                        std::thread::sleep(grace_time - time_since_last_change);
+                                    let mut last_change_at = last_change_at.lock().unwrap();
+
+                                    if let Some(time_since_last_change) = last_change_at.map(|lca| now - lca) {
+                                        if time_since_last_change < grace_time {
+                                            break 'gtl grace_time - time_since_last_change;
+                                        }
                                     }
+
+                                    *last_change_at = None;
+
+                                    Duration::ZERO
+                                };
+
+                                if grace_time_left.is_zero() {
+                                    break;
                                 }
 
-                                *last_change_at = None;
+                                std::thread::sleep(grace_time_left);
                             }
+
+                            let now = Instant::now();
 
                             // Update last_backup_at
                             {
@@ -182,6 +201,8 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
                             pb.finish_and_clear();
 
+                            let now = Instant::now();
+
                             // Clear change tracker, to avoid restore triggering automatic backup
                             let mut last_change_at = last_change_at.lock().unwrap();
                             *last_change_at = None;
@@ -226,6 +247,19 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
             {
                 let last_backup_at = last_backup_at.lock().unwrap();
+
+                // If no backup has been created since the last autobackup was created,
+                // do not request another. It's likely still waiting for grace time.
+                if let Some(last_autobackup_at) = last_autobackup_at {
+                    let Some(last_backup_at) = *last_backup_at else {
+                        continue;
+                    };
+
+                    if last_backup_at < last_autobackup_at {
+                        continue;
+                    }
+                }
+
                 let last_change_at = last_change_at.lock().unwrap();
 
                 let Some(last_change_at) = *last_change_at else {
