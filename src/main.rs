@@ -1,5 +1,6 @@
 mod command;
 mod config;
+mod internal;
 
 use anyhow::Context;
 use clap::Parser;

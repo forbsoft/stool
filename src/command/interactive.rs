@@ -15,6 +15,8 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use time::{format_description::BorrowedFormatItem, macros::format_description, OffsetDateTime};
 use tracing::{debug, error, info, warn};
 
+use crate::internal::sync;
+
 const ARCHIVE_DATE_FORMAT: &[BorrowedFormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour]-[minute]-[second]");
 
@@ -113,7 +115,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                                     }
 
                                     // Update staging directory
-                                    rclone_sync(path, &staging_path.join(name))?;
+                                    sync::sync(path, &staging_path.join(name))?;
                                 }
 
                                 pb.inc(1);
@@ -172,7 +174,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                                     }
 
                                     // Update staging directory
-                                    rclone_sync(&src_path, path)?;
+                                    sync::sync(&src_path, path)?;
                                 }
 
                                 pb.inc(1);
@@ -431,16 +433,6 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
     backup_join_handle.join().unwrap();
 
     mp.clear()?;
-
-    Ok(())
-}
-
-fn rclone_sync(src: &Path, dst: &Path) -> Result<(), anyhow::Error> {
-    std::process::Command::new("rclone")
-        .arg("sync")
-        .arg(src)
-        .arg(dst)
-        .status()?;
 
     Ok(())
 }
