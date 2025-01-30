@@ -160,15 +160,20 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                                 pb.set_message(format!("Staging: {name}"));
 
                                 'stage: {
+                                    let staging_gsp_path = staging_path.join(name);
+
+                                    // If source path is missing, remove the existing staging directory for this save path
                                     if !path.exists() {
                                         warn!("Path does not exist [{name}]: {}", path.display());
+
+                                        fs::remove_dir_all(&staging_gsp_path)?;
                                         break 'stage;
                                     }
 
                                     let ignore_globset = gsp.ignore_globset.as_ref().unwrap_or(&empty_globset);
 
                                     // Update staging directory
-                                    sync::sync(path, &staging_path.join(name), ignore_globset)?;
+                                    sync::sync(path, &staging_gsp_path, ignore_globset)?;
                                 }
 
                                 pb.inc(1);
