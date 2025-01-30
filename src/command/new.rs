@@ -37,7 +37,13 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
             .interact_text()?
             .into();
 
-        save_paths.insert(name, GameSavePath { path });
+        save_paths.insert(
+            name,
+            GameSavePath {
+                path,
+                ignore: Default::default(),
+            },
+        );
     }
 
     let backup_interval: u64 = dialoguer::Input::new()

@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -15,7 +15,7 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use time::{format_description::BorrowedFormatItem, macros::format_description, OffsetDateTime};
 use tracing::{debug, error, info, warn};
 
-use crate::internal::sync;
+use crate::internal::{filter, sync};
 
 const ARCHIVE_DATE_FORMAT: &[BorrowedFormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour]-[minute]-[second]");
@@ -23,6 +23,12 @@ const ARCHIVE_DATE_FORMAT: &[BorrowedFormatItem<'static>] =
 enum BackupRequest {
     CreateBackup { archive_name: String },
     RestoreBackup { archive_name: String },
+}
+
+pub struct InternalGameSavePath {
+    pub name: String,
+    pub path: PathBuf,
+    pub ignore_globset: Option<globset::GlobSet>,
 }
 
 pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Result<(), anyhow::Error> {
@@ -61,7 +67,22 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
     // Backup thread
     // Ensures that multiple backups cannot run simultaneously
     let backup_join_handle = {
-        let save_paths = gcfg.save_paths.clone();
+        let save_paths: Vec<InternalGameSavePath> = gcfg
+            .save_paths
+            .iter()
+            .map(|(name, gsp)| {
+                let name = name.clone();
+                let path = gsp.path.clone();
+                let ignore_globset = gsp.ignore.as_ref().map(|v| filter::build_globset(v).unwrap());
+
+                InternalGameSavePath {
+                    name,
+                    path,
+                    ignore_globset,
+                }
+            })
+            .collect();
+
         let staging_path = staging_path.to_owned();
         let backup_path = backup_path.to_owned();
 
@@ -69,6 +90,8 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
         let last_backup_at = last_backup_at.clone();
         let last_change_at = last_change_at.clone();
+
+        let empty_globset = globset::GlobSet::empty();
 
         let mp = mp.clone();
 
@@ -122,7 +145,8 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                             let pb =
                                 mp.add(ProgressBar::new(save_paths.len() as u64).with_message("Preparing to stage"));
 
-                            for (name, gsp) in save_paths.iter() {
+                            for gsp in save_paths.iter() {
+                                let name = &gsp.name;
                                 let path = &gsp.path;
 
                                 pb.set_message(format!("Staging: {name}"));
@@ -133,8 +157,10 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                                         break 'stage;
                                     }
 
+                                    let ignore_globset = gsp.ignore_globset.as_ref().unwrap_or(&empty_globset);
+
                                     // Update staging directory
-                                    sync::sync(path, &staging_path.join(name))?;
+                                    sync::sync(path, &staging_path.join(name), ignore_globset)?;
                                 }
 
                                 pb.inc(1);
@@ -179,7 +205,8 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                             let pb =
                                 mp.add(ProgressBar::new(save_paths.len() as u64).with_message("Preparing to restore"));
 
-                            for (name, gsp) in save_paths.iter() {
+                            for gsp in save_paths.iter() {
+                                let name = &gsp.name;
                                 let path = &gsp.path;
 
                                 pb.set_message(format!("Restoring: {name}"));
@@ -193,7 +220,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                                     }
 
                                     // Update staging directory
-                                    sync::sync(&src_path, path)?;
+                                    sync::sync(&src_path, path, &empty_globset)?;
                                 }
 
                                 pb.inc(1);

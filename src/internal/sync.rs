@@ -48,7 +48,7 @@ pub enum SyncJobError {
 }
 
 impl SyncDir {
-    pub fn new(path: &Path) -> Result<Self, anyhow::Error> {
+    pub fn new(path: &Path, ignore_globset: &globset::GlobSet) -> Result<Self, anyhow::Error> {
         let path = path.canonicalize()?;
         let mut dirs: HashSet<PathBuf> = HashSet::new();
         let mut files: HashSet<PathBuf> = HashSet::new();
@@ -58,6 +58,10 @@ impl SyncDir {
         for entry in entries {
             let is_file = entry.file_type().is_file();
             let rel_path = entry.into_path().strip_prefix(&path)?.to_path_buf();
+
+            if ignore_globset.is_match(&rel_path) {
+                continue;
+            }
 
             if !is_file {
                 dirs.insert(rel_path);
@@ -214,7 +218,7 @@ impl SyncJob {
     }
 }
 
-pub fn sync(src: &Path, dst: &Path) -> Result<(), anyhow::Error> {
+pub fn sync(src: &Path, dst: &Path, ignore_globset: &globset::GlobSet) -> Result<(), anyhow::Error> {
     // Create destination directory if it does not exist
     if !dst.exists() {
         fs::create_dir_all(dst)?;
@@ -223,8 +227,8 @@ pub fn sync(src: &Path, dst: &Path) -> Result<(), anyhow::Error> {
     let mut attempt = 0;
 
     loop {
-        let src = SyncDir::new(src)?;
-        let dst = SyncDir::new(dst)?;
+        let src = SyncDir::new(src, ignore_globset)?;
+        let dst = SyncDir::new(dst, &globset::GlobSet::empty())?;
         let job = dst.sync_from(&src)?;
 
         let res = job.execute();

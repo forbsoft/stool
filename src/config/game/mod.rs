@@ -11,6 +11,7 @@ use serde_derive::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub struct GameSavePath {
     pub path: PathBuf,
+    pub ignore: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
