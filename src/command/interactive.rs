@@ -53,7 +53,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
     // Set break (Ctrl-C) handler.
     ctrlc::set_handler({
-        let cancel = Arc::clone(&cancel);
+        let cancel = cancel.clone();
 
         move || {
             info!("Cancellation requested by user.");
@@ -61,6 +61,8 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
         }
     })
     .unwrap_or_else(|err| error!("Error setting Ctrl-C handler: {}", err));
+
+    let pause_autobackup = Arc::new(AtomicBool::new(false));
 
     let (backup_tx, backup_rx) = std::sync::mpsc::channel::<BackupRequest>();
 
@@ -88,6 +90,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
         let grace_time = Duration::from_secs(gcfg.grace_time);
 
+        let pause_autobackup = pause_autobackup.clone();
         let last_backup_at = last_backup_at.clone();
         let last_change_at = last_change_at.clone();
 
@@ -97,6 +100,9 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
         std::thread::spawn(move || {
             for backup_request in &backup_rx {
+                // Pause autobackup while executing a request
+                pause_autobackup.store(true, Ordering::SeqCst);
+
                 let res: Result<(), anyhow::Error> = (|| {
                     match backup_request {
                         BackupRequest::CreateBackup { archive_name } => {
@@ -252,16 +258,20 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                 if let Err(err) = res {
                     error!("{err}");
                 }
+
+                // Resume autobackup after request is completed
+                pause_autobackup.store(false, Ordering::SeqCst);
             }
         })
     };
 
     // Auto-backup thread
     let autobackup_join_handle = {
-        let cancel = Arc::clone(&cancel);
+        let cancel = cancel.clone();
 
         let backup_interval = Duration::from_secs(gcfg.backup_interval);
 
+        let pause_autobackup = pause_autobackup.clone();
         let last_backup_at = last_backup_at.clone();
         let last_change_at = last_change_at.clone();
 
@@ -275,6 +285,10 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
             }
 
             std::thread::sleep(Duration::from_secs(1));
+
+            if pause_autobackup.load(Ordering::SeqCst) {
+                continue;
+            }
 
             let now = Instant::now();
 
@@ -325,7 +339,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
     // Watch save directory for changes
     let (watcher_join_handle, watcher) = {
-        let cancel = Arc::clone(&cancel);
+        let cancel = cancel.clone();
 
         let last_change_at = last_change_at.clone();
 
