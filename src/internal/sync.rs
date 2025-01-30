@@ -24,7 +24,7 @@ enum SyncOp {
     CreateDir { path: PathBuf },
     Delete { path: PathBuf },
     RemoveDir { path: PathBuf },
-    VerifyCheckSum { path: PathBuf, crc32: u32 },
+    VerifyCheckSum { path: PathBuf, size: u64, crc32: u32 },
 }
 
 #[derive(Debug)]
@@ -47,11 +47,33 @@ pub enum SyncJobError {
     ReadError { path: PathBuf },
 }
 
+pub trait SyncUiHandler {
+    fn begin_scan(&mut self);
+    fn end_scan(&mut self);
+
+    fn begin_prepare(&mut self);
+    fn end_prepare(&mut self);
+
+    fn begin_sync(&mut self, op_count: usize);
+    fn sync_progress(&mut self);
+    fn end_sync(&mut self);
+
+    fn begin_file(&mut self, prefix: &str, filename: &str, size: u64);
+    fn file_progress(&mut self, bytes: u64);
+    fn end_file(&mut self);
+}
+
 impl SyncDir {
-    pub fn new(path: &Path, ignore_globset: &globset::GlobSet) -> Result<Self, anyhow::Error> {
+    pub fn new(
+        path: &Path,
+        ignore_globset: &globset::GlobSet,
+        ui: &mut dyn SyncUiHandler,
+    ) -> Result<Self, anyhow::Error> {
         let path = path.canonicalize()?;
         let mut dirs: HashSet<PathBuf> = HashSet::new();
         let mut files: HashSet<PathBuf> = HashSet::new();
+
+        ui.begin_scan();
 
         let entries = walkdir::WalkDir::new(&path).into_iter().filter_map(Result::ok);
 
@@ -71,15 +93,19 @@ impl SyncDir {
             files.insert(rel_path);
         }
 
+        ui.end_scan();
+
         Ok(Self { path, dirs, files })
     }
 
-    pub fn sync_from(&self, other: &Self) -> Result<SyncJob, anyhow::Error> {
+    pub fn sync_from(&self, other: &Self, ui: &mut dyn SyncUiHandler) -> Result<SyncJob, anyhow::Error> {
         let src = other;
         let dst = self;
 
         let src_path = src.path.clone();
         let dst_path = dst.path.clone();
+
+        ui.begin_prepare();
 
         let item_count = src.dirs.len() + src.files.len();
         let mut ops: Vec<SyncOp> = Vec::with_capacity(item_count);
@@ -95,11 +121,19 @@ impl SyncDir {
         for p in files_not_in_dst {
             let src_file_path = src_path.join(p);
 
-            let src_hash = hash_crc32(&src_file_path)?;
+            let src_metadata = src_file_path.metadata()?;
+            let size = src_metadata.len();
+
+            ui.begin_file("Checksum", &p.to_string_lossy(), size);
+
+            let src_hash = hash_crc32(&src_file_path, |bytes| ui.file_progress(bytes as u64))?;
+
+            ui.end_file();
 
             ops.push(SyncOp::Copy { path: p.clone() });
             post_ops.push(SyncOp::VerifyCheckSum {
                 path: p.clone(),
+                size,
                 crc32: src_hash,
             });
         }
@@ -110,11 +144,16 @@ impl SyncDir {
             let src_file_path = src_path.join(p);
             let dst_file_path = dst_path.join(p);
 
+            let src_size;
+
             'diff: {
                 let dst_metadata = dst_file_path.metadata()?;
                 let src_metadata = src_file_path.metadata()?;
 
-                if src_metadata.len() != dst_metadata.len() {
+                src_size = src_metadata.len();
+                let dst_size = dst_metadata.len();
+
+                if src_size != dst_size {
                     break 'diff;
                 }
 
@@ -129,11 +168,16 @@ impl SyncDir {
                 continue 'copy_different;
             }
 
-            let src_hash = hash_crc32(&src_file_path)?;
+            ui.begin_file("Checksum", &p.to_string_lossy(), src_size);
+
+            let src_hash = hash_crc32(&src_file_path, |bytes| ui.file_progress(bytes as u64))?;
+
+            ui.end_file();
 
             ops.push(SyncOp::Copy { path: p.clone() });
             post_ops.push(SyncOp::VerifyCheckSum {
                 path: p.clone(),
+                size: src_size,
                 crc32: src_hash,
             });
         }
@@ -155,6 +199,8 @@ impl SyncDir {
         // Add post-ops to the end
         ops.extend(post_ops);
 
+        ui.end_prepare();
+
         Ok(SyncJob {
             src_path,
             dst_path,
@@ -164,9 +210,11 @@ impl SyncDir {
 }
 
 impl SyncJob {
-    pub fn execute(self) -> Result<(), SyncJobError> {
+    pub fn execute(self, ui: &mut dyn SyncUiHandler) -> Result<(), SyncJobError> {
         let src_path = self.src_path;
         let dst_path = self.dst_path;
+
+        ui.begin_sync(self.ops.len());
 
         for op in self.ops {
             match op {
@@ -181,6 +229,9 @@ impl SyncJob {
 
                     let src_modified = FileTime::from_last_modification_time(&src_metadata);
 
+                    let size = src_metadata.len();
+                    ui.begin_file("Copy", &path.to_string_lossy(), size);
+
                     let res = fs::copy(&src_file_path, &dst_file_path);
                     match res {
                         Ok(_) => {}
@@ -190,8 +241,12 @@ impl SyncJob {
                         },
                     }
 
+                    ui.file_progress(size);
+
                     filetime::set_file_mtime(&dst_file_path, src_modified)
                         .map_err(|e| SyncJobError::Anyhow(e.into()))?;
+
+                    ui.end_file();
                 }
                 SyncOp::CreateDir { path } => {
                     fs::create_dir_all(dst_path.join(path)).map_err(|e| SyncJobError::Anyhow(e.into()))?;
@@ -202,23 +257,36 @@ impl SyncJob {
                 SyncOp::RemoveDir { path } => {
                     fs::remove_dir(dst_path.join(path)).map_err(|e| SyncJobError::Anyhow(e.into()))?;
                 }
-                SyncOp::VerifyCheckSum { path, crc32 } => {
+                SyncOp::VerifyCheckSum { path, size, crc32 } => {
                     let dst_file_path = dst_path.join(&path);
 
-                    let dst_hash = hash_crc32(&dst_file_path)?;
+                    ui.begin_file("Verify", &path.to_string_lossy(), size);
+
+                    let dst_hash = hash_crc32(&dst_file_path, |bytes| ui.file_progress(bytes as u64))?;
+
+                    ui.end_file();
 
                     if dst_hash != crc32 {
                         return Err(SyncJobError::ChecksumMismatch);
                     }
                 }
             }
+
+            ui.sync_progress();
         }
+
+        ui.end_sync();
 
         Ok(())
     }
 }
 
-pub fn sync(src: &Path, dst: &Path, ignore_globset: &globset::GlobSet) -> Result<(), anyhow::Error> {
+pub fn sync(
+    src: &Path,
+    dst: &Path,
+    ignore_globset: &globset::GlobSet,
+    ui: &mut dyn SyncUiHandler,
+) -> Result<(), anyhow::Error> {
     // Create destination directory if it does not exist
     if !dst.exists() {
         fs::create_dir_all(dst)?;
@@ -227,11 +295,11 @@ pub fn sync(src: &Path, dst: &Path, ignore_globset: &globset::GlobSet) -> Result
     let mut attempt = 0;
 
     loop {
-        let src = SyncDir::new(src, ignore_globset)?;
-        let dst = SyncDir::new(dst, &globset::GlobSet::empty())?;
-        let job = dst.sync_from(&src)?;
+        let src = SyncDir::new(src, ignore_globset, ui)?;
+        let dst = SyncDir::new(dst, &globset::GlobSet::empty(), ui)?;
+        let job = dst.sync_from(&src, ui)?;
 
-        let res = job.execute();
+        let res = job.execute(ui);
         match res {
             Ok(_) => {}
             Err(err) => {

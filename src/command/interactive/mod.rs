@@ -1,3 +1,5 @@
+mod ui;
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -10,10 +12,10 @@ use std::{
 };
 
 use anyhow::Context;
-use indicatif::ProgressBar;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use time::{format_description::BorrowedFormatItem, macros::format_description, OffsetDateTime};
 use tracing::{debug, error, info, warn};
+use ui::FancyUiHandler;
 
 use crate::internal::{filter, sync};
 
@@ -45,8 +47,6 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
     let last_backup_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let last_change_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
-
-    let mp = indicatif::MultiProgress::new();
 
     // Cancellation boolean.
     let cancel = Arc::new(AtomicBool::new(false));
@@ -96,7 +96,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
         let empty_globset = globset::GlobSet::empty();
 
-        let mp = mp.clone();
+        let mut ui = FancyUiHandler::new();
 
         std::thread::spawn(move || {
             for backup_request in &backup_rx {
@@ -138,7 +138,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                                 std::thread::sleep(grace_time_left);
                             }
 
-                            info!("Creating backup: {archive_name}");
+                            ui.begin_backup(&archive_name);
 
                             let now = Instant::now();
 
@@ -150,14 +150,13 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
                             let archive_path = backup_path.join(&archive_name);
 
-                            let pb =
-                                mp.add(ProgressBar::new(save_paths.len() as u64).with_message("Preparing to stage"));
+                            ui.begin_staging(save_paths.len());
 
                             for gsp in save_paths.iter() {
                                 let name = &gsp.name;
                                 let path = &gsp.path;
 
-                                pb.set_message(format!("Staging: {name}"));
+                                ui.begin_stage(name);
 
                                 'stage: {
                                     let staging_gsp_path = staging_path.join(name);
@@ -173,22 +172,22 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                                     let ignore_globset = gsp.ignore_globset.as_ref().unwrap_or(&empty_globset);
 
                                     // Update staging directory
-                                    sync::sync(path, &staging_gsp_path, ignore_globset)?;
+                                    sync::sync(path, &staging_gsp_path, ignore_globset, &mut ui)?;
                                 }
 
-                                pb.inc(1);
+                                ui.end_stage();
                             }
 
-                            pb.finish_and_clear();
+                            ui.end_staging();
 
-                            let pb = mp.add(ProgressBar::new_spinner().with_message("Compressing archive"));
+                            ui.begin_compress();
 
                             // Create backup archive
                             create_archive(&staging_path, &archive_path)?;
 
-                            pb.finish_and_clear();
+                            ui.end_compress();
 
-                            info!("Backup created: {archive_name}");
+                            ui.end_backup(true);
                         }
                         BackupRequest::RestoreBackup { archive_name } => {
                             let archive_path = backup_path.join(&archive_name);
@@ -198,7 +197,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                                 return Ok(());
                             }
 
-                            info!("Restoring backup from archive: {archive_name}");
+                            ui.begin_restore(&archive_name);
 
                             // Remove staging directory if it exists
                             if staging_path.exists() {
@@ -208,23 +207,20 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                             // Create new empty staging directory
                             fs::create_dir_all(&staging_path)?;
 
-                            let pb = mp.add(ProgressBar::new_spinner().with_message("Unpacking archive"));
+                            ui.begin_extract();
 
                             // Unpack archive to be restored into staging directory
                             unpack_archive(&archive_path, &staging_path)?;
 
-                            pb.finish_and_clear();
+                            ui.end_extract();
 
                             // Restore save paths from staging directory
-
-                            let pb =
-                                mp.add(ProgressBar::new(save_paths.len() as u64).with_message("Preparing to restore"));
 
                             for gsp in save_paths.iter() {
                                 let name = &gsp.name;
                                 let path = &gsp.path;
 
-                                pb.set_message(format!("Restoring: {name}"));
+                                ui.begin_restore_sp(name);
 
                                 'restore: {
                                     let src_path = staging_path.join(name);
@@ -235,15 +231,13 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                                     }
 
                                     // Update staging directory
-                                    sync::sync(&src_path, path, &empty_globset)?;
+                                    sync::sync(&src_path, path, &empty_globset, &mut ui)?;
                                 }
 
-                                pb.inc(1);
+                                ui.end_restore_sp();
                             }
 
-                            pb.finish_and_clear();
-
-                            info!("Backup restored: {archive_name}");
+                            ui.end_restore(true);
 
                             let now = Instant::now();
 
@@ -267,6 +261,8 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                 // Resume autobackup after request is completed
                 pause_autobackup.store(false, Ordering::SeqCst);
             }
+
+            ui.clear().unwrap();
         })
     };
 
@@ -486,6 +482,12 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
     info!("Shutting down...");
 
     'exit_backup: {
+        // If autobackup is paused, do not request an exit backup,
+        // as that means a backup or restore is in progress.
+        if pause_autobackup.load(Ordering::SeqCst) {
+            break 'exit_backup;
+        }
+
         let last_backup_at = last_backup_at.lock().unwrap();
         let last_change_at = last_change_at.lock().unwrap();
 
@@ -515,8 +517,6 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
     watcher_join_handle.join().unwrap();
     autobackup_join_handle.join().unwrap();
     backup_join_handle.join().unwrap();
-
-    mp.clear()?;
 
     Ok(())
 }
