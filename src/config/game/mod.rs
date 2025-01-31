@@ -20,6 +20,7 @@ pub struct GameConfig {
     pub save_paths: HashMap<String, GameSavePath>,
     pub backup_interval: u64,
     pub grace_time: u64,
+    pub copy_latest_to_path: Option<PathBuf>,
 }
 
 impl GameConfig {

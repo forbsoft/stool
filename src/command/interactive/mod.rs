@@ -47,6 +47,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
     let last_backup_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let last_change_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    let latest_backup_path: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
 
     // Cancellation boolean.
     let cancel = Arc::new(AtomicBool::new(false));
@@ -93,6 +94,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
         let pause_autobackup = pause_autobackup.clone();
         let last_backup_at = last_backup_at.clone();
         let last_change_at = last_change_at.clone();
+        let latest_backup_path = latest_backup_path.clone();
 
         let empty_globset = globset::GlobSet::empty();
 
@@ -188,6 +190,10 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
                             ui.end_compress();
 
                             ui.end_backup(true);
+
+                            // Store path to latest backup archive
+                            let mut latest_backup_path = latest_backup_path.lock().unwrap();
+                            *latest_backup_path = Some(archive_path);
                         }
                         BackupRequest::RestoreBackup { archive_name } => {
                             let archive_path = backup_path.join(&archive_name);
@@ -517,6 +523,21 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
     watcher_join_handle.join().unwrap();
     autobackup_join_handle.join().unwrap();
     backup_join_handle.join().unwrap();
+
+    // If a copy_latest_to_path is set, and a backup was created this session,
+    // copy the latest backup to the specified path.
+    'copy_latest: {
+        if let Some(copy_latest_to_path) = gcfg.copy_latest_to_path {
+            let latest_backup_path = latest_backup_path.lock().unwrap();
+            if let Some(latest_backup_path) = latest_backup_path.as_ref() {
+                let Some(filename) = latest_backup_path.file_name() else {
+                    break 'copy_latest;
+                };
+
+                fs::copy(latest_backup_path, copy_latest_to_path.join(filename))?;
+            }
+        }
+    }
 
     Ok(())
 }

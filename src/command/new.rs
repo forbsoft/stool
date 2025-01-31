@@ -56,10 +56,22 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
         .default(10)
         .interact_text()?;
 
+    let copy_latest_to_path: String = dialoguer::Input::new()
+        .with_prompt("Copy latest backup to path (blank for none)")
+        .allow_empty(true)
+        .interact_text()?;
+
+    let copy_latest_to_path: Option<PathBuf> = if !copy_latest_to_path.is_empty() {
+        Some(copy_latest_to_path.into())
+    } else {
+        None
+    };
+
     let game_config = GameConfig {
         save_paths,
         backup_interval,
         grace_time,
+        copy_latest_to_path,
     };
 
     fs::create_dir_all(game_config_path)?;
