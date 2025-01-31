@@ -12,12 +12,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Context;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use time::{format_description::BorrowedFormatItem, macros::format_description, OffsetDateTime};
 use tracing::{debug, error, info, warn};
 use ui::StoolUiHandler;
 
-use crate::internal::{filter, sync};
+use crate::internal::{filter, pid::PidLock, sync};
 
 pub const ARCHIVE_DATE_FORMAT: &[BorrowedFormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour]-[minute]-[second]");
@@ -49,6 +50,8 @@ pub fn run(
     let gcfg = crate::config::game::GameConfig::from_file(&file_path)?;
 
     let output_path = data_path.join(name);
+
+    let pid_lock = PidLock::acquire(output_path.join("stool.pid")).context("Acquiring PID-lock")?;
 
     let staging_path = output_path.join("staging");
     let backup_path = output_path.join("backups");
@@ -378,6 +381,8 @@ pub fn run(
         let backup_tx = backup_tx.clone();
 
         std::thread::spawn(move || {
+            let _pid_lock = pid_lock;
+
             while !cancel.load(Ordering::SeqCst) {
                 std::thread::sleep(SLEEP_DURATION);
             }
