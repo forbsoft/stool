@@ -1,6 +1,8 @@
 mod command;
 mod config;
+mod engine;
 mod internal;
+mod ui;
 
 use anyhow::Context;
 use clap::Parser;
@@ -22,6 +24,14 @@ enum Command {
     },
     #[clap(about = "Create a new game config")]
     New,
+    #[clap(about = "Run game via stool")]
+    RunGame {
+        #[clap(help = "Game name")]
+        name: String,
+
+        #[clap(help = "Game command")]
+        game_command: Vec<String>,
+    },
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -38,6 +48,9 @@ fn main() -> Result<(), anyhow::Error> {
     match opt.command {
         Command::Interactive { name } => command::interactive(&name, &game_config_path, &config.data_path),
         Command::New => command::new(&game_config_path),
+        Command::RunGame { name, game_command } => {
+            command::rungame(&name, &game_config_path, &config.data_path, game_command)
+        }
     }?;
 
     Ok(())

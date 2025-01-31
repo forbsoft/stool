@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 
-use crate::internal::sync::SyncUiHandler;
+use crate::{engine::ui::StoolUiHandler, internal::sync::SyncUiHandler};
 
 const OVERALL_TEMPLATE: &str = " {spinner:.blue} {wide_msg:.blue}";
 const SCAN_TEMPLATE: &str = " {spinner:.blue} {wide_msg:.blue}";
@@ -45,14 +45,16 @@ impl FancyUiHandler {
             file_pb: None,
         }
     }
+}
 
-    pub fn clear(self) -> Result<(), anyhow::Error> {
+impl StoolUiHandler for FancyUiHandler {
+    fn clear(self) -> Result<(), anyhow::Error> {
         self.multi_progress.clear()?;
 
         Ok(())
     }
 
-    pub fn begin_backup(&mut self, name: &str) {
+    fn begin_backup(&mut self, name: &str) {
         self.backup_name = Some(name.to_owned());
 
         //self.multi_progress.println(format!("Creating backup: {name}")).ok();
@@ -68,7 +70,7 @@ impl FancyUiHandler {
         self.overall_pb = Some(pb);
     }
 
-    pub fn end_backup(&mut self, success: bool) {
+    fn end_backup(&mut self, success: bool) {
         let name = self.backup_name.take().unwrap_or_default();
 
         let Some(pb) = self.overall_pb.take() else {
@@ -84,7 +86,7 @@ impl FancyUiHandler {
         pb.finish_with_message(message);
     }
 
-    pub fn begin_staging(&mut self, count: usize) {
+    fn begin_staging(&mut self, count: usize) {
         let pb = ProgressBar::new(count as u64)
             .with_style(
                 ProgressStyle::default_bar()
@@ -100,7 +102,7 @@ impl FancyUiHandler {
         self.staging_pb = Some(pb);
     }
 
-    pub fn begin_stage(&mut self, name: &str) {
+    fn begin_stage(&mut self, name: &str) {
         self.sync_message = name.to_owned();
 
         let Some(pb) = self.staging_pb.as_ref() else {
@@ -110,7 +112,7 @@ impl FancyUiHandler {
         pb.set_message(name.to_owned());
     }
 
-    pub fn end_stage(&mut self) {
+    fn end_stage(&mut self) {
         let Some(pb) = self.staging_pb.as_ref() else {
             return;
         };
@@ -118,7 +120,7 @@ impl FancyUiHandler {
         pb.inc(1);
     }
 
-    pub fn end_staging(&mut self) {
+    fn end_staging(&mut self) {
         self.sync_message.clear();
 
         let Some(pb) = self.staging_pb.take() else {
@@ -128,7 +130,7 @@ impl FancyUiHandler {
         pb.finish_and_clear();
     }
 
-    pub fn begin_compress(&mut self) {
+    fn begin_compress(&mut self) {
         let pb = ProgressBar::new_spinner()
             .with_style(ProgressStyle::default_bar().template(PREPARE_TEMPLATE).unwrap())
             .with_message("Compressing...");
@@ -140,7 +142,7 @@ impl FancyUiHandler {
         self.compress_pb = Some(pb);
     }
 
-    pub fn end_compress(&mut self) {
+    fn end_compress(&mut self) {
         let Some(pb) = self.compress_pb.take() else {
             return;
         };
@@ -148,7 +150,7 @@ impl FancyUiHandler {
         pb.finish_and_clear();
     }
 
-    pub fn begin_restore(&mut self, name: &str) {
+    fn begin_restore(&mut self, name: &str) {
         self.backup_name = Some(name.to_owned());
 
         //self.multi_progress.println(format!("Restoring backup: {name}")).ok();
@@ -164,7 +166,7 @@ impl FancyUiHandler {
         self.overall_pb = Some(pb);
     }
 
-    pub fn end_restore(&mut self, success: bool) {
+    fn end_restore(&mut self, success: bool) {
         self.sync_message.clear();
 
         let name = self.backup_name.take().unwrap_or_default();
@@ -182,7 +184,7 @@ impl FancyUiHandler {
         pb.finish_with_message(message);
     }
 
-    pub fn begin_extract(&mut self) {
+    fn begin_extract(&mut self) {
         let pb = ProgressBar::new_spinner()
             .with_style(ProgressStyle::default_bar().template(PREPARE_TEMPLATE).unwrap())
             .with_message("Extracting...");
@@ -194,7 +196,7 @@ impl FancyUiHandler {
         self.compress_pb = Some(pb);
     }
 
-    pub fn end_extract(&mut self) {
+    fn end_extract(&mut self) {
         let Some(pb) = self.compress_pb.take() else {
             return;
         };
@@ -202,7 +204,7 @@ impl FancyUiHandler {
         pb.finish_and_clear();
     }
 
-    pub fn begin_restore_sp(&mut self, name: &str) {
+    fn begin_restore_sp(&mut self, name: &str) {
         self.sync_message = name.to_owned();
 
         let Some(pb) = self.staging_pb.as_ref() else {
@@ -212,7 +214,7 @@ impl FancyUiHandler {
         pb.set_message(name.to_owned());
     }
 
-    pub fn end_restore_sp(&mut self) {
+    fn end_restore_sp(&mut self) {
         let Some(pb) = self.staging_pb.as_ref() else {
             return;
         };

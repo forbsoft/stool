@@ -1,4 +1,4 @@
-mod ui;
+pub mod ui;
 
 use std::{
     fs,
@@ -6,34 +6,42 @@ use std::{
     process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
+        mpsc::Sender,
         Arc, Mutex,
     },
     time::{Duration, Instant},
 };
 
-use anyhow::Context;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use time::{format_description::BorrowedFormatItem, macros::format_description, OffsetDateTime};
 use tracing::{debug, error, info, warn};
-use ui::FancyUiHandler;
+use ui::StoolUiHandler;
 
 use crate::internal::{filter, sync};
 
-const ARCHIVE_DATE_FORMAT: &[BorrowedFormatItem<'static>] =
+pub const ARCHIVE_DATE_FORMAT: &[BorrowedFormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour]-[minute]-[second]");
 
-enum BackupRequest {
+const SLEEP_DURATION: Duration = Duration::from_secs(1);
+
+pub enum BackupRequest {
     CreateBackup { archive_name: String },
     RestoreBackup { archive_name: String },
 }
 
-pub struct InternalGameSavePath {
+struct InternalGameSavePath {
     pub name: String,
     pub path: PathBuf,
     pub ignore_globset: Option<globset::GlobSet>,
 }
 
-pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Result<(), anyhow::Error> {
+pub fn run(
+    name: &str,
+    game_config_path: &Path,
+    data_path: &Path,
+    cancel: Arc<AtomicBool>,
+    mut ui: impl StoolUiHandler,
+) -> Result<(std::thread::JoinHandle<()>, Sender<BackupRequest>), anyhow::Error> {
     let file_name = format!("{name}.toml");
     let file_path = game_config_path.join(&file_name);
 
@@ -48,20 +56,6 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
     let last_backup_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let last_change_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let latest_backup_path: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
-
-    // Cancellation boolean.
-    let cancel = Arc::new(AtomicBool::new(false));
-
-    // Set break (Ctrl-C) handler.
-    ctrlc::set_handler({
-        let cancel = cancel.clone();
-
-        move || {
-            info!("Cancellation requested by user.");
-            cancel.store(true, Ordering::SeqCst);
-        }
-    })
-    .unwrap_or_else(|err| error!("Error setting Ctrl-C handler: {}", err));
 
     let pause_autobackup = Arc::new(AtomicBool::new(false));
 
@@ -97,8 +91,6 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
         let latest_backup_path = latest_backup_path.clone();
 
         let empty_globset = globset::GlobSet::empty();
-
-        let mut ui = FancyUiHandler::new();
 
         std::thread::spawn(move || {
             for backup_request in &backup_rx {
@@ -382,164 +374,67 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
         (join_handle, watcher)
     };
 
-    // Interactive prompt
+    let engine_join_handle = {
+        let backup_tx = backup_tx.clone();
 
-    let create_manual_backup = || -> Result<(), anyhow::Error> {
-        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-        let default_name = format!("Manual {}", now.format(ARCHIVE_DATE_FORMAT).unwrap());
+        std::thread::spawn(move || {
+            while !cancel.load(Ordering::SeqCst) {
+                std::thread::sleep(SLEEP_DURATION);
+            }
 
-        let name: String = dialoguer::Input::new()
-            .with_prompt("Backup name")
-            .default(default_name)
-            .interact_text()?;
+            info!("Shutting down...");
 
-        let archive_name = format!("{name}.7z");
-
-        backup_tx.send(BackupRequest::CreateBackup { archive_name })?;
-
-        Ok(())
-    };
-
-    let restore_backup = || -> Result<(), anyhow::Error> {
-        let backup_files = fs::read_dir(&backup_path)?;
-        let mut backup_files: Vec<_> = backup_files
-            .filter_map(Result::ok)
-            .filter_map(|e| {
-                let path = e.path();
-
-                if !path.is_file() || !matches!(path.extension(), Some(ext) if ext == "7z") {
-                    return None;
+            'exit_backup: {
+                // If autobackup is paused, do not request an exit backup,
+                // as that means a backup or restore is in progress.
+                if pause_autobackup.load(Ordering::SeqCst) {
+                    break 'exit_backup;
                 }
 
-                let metadata = path.metadata().unwrap();
-                let modified = metadata.modified().unwrap();
+                let last_backup_at = last_backup_at.lock().unwrap();
+                let last_change_at = last_change_at.lock().unwrap();
 
-                Some((path, modified))
-            })
-            .collect();
-
-        backup_files.sort_by_key(|(_, v)| *v);
-        backup_files.reverse();
-        backup_files.truncate(20);
-
-        let backup_items: Vec<_> = backup_files
-            .iter()
-            .map(|(p, _)| p.file_name().unwrap().to_string_lossy())
-            .chain(["...".into()])
-            .collect();
-
-        let Some(selected_ix) = dialoguer::Select::new()
-            .with_prompt("Backup to restore")
-            .items(&backup_items)
-            .interact_opt()?
-        else {
-            return Ok(());
-        };
-
-        let archive_name: String = if selected_ix < backup_items.len() - 1 {
-            backup_items
-                .get(selected_ix)
-                .context("Getting selected backup item by index")?
-                .clone()
-                .into_owned()
-        } else {
-            dialoguer::Input::new()
-                .with_prompt("Name of archive to restore")
-                .allow_empty(true)
-                .interact_text()?
-        };
-
-        if archive_name.is_empty() {
-            return Ok(());
-        }
-
-        backup_tx.send(BackupRequest::RestoreBackup { archive_name })?;
-
-        Ok(())
-    };
-
-    loop {
-        eprintln!();
-
-        let Ok(choice) = dialoguer::Select::new()
-            .default(0)
-            .item("Create backup") // 0
-            .item("Restore backup") // 0
-            .item("Exit") // 1
-            .interact_opt()
-        else {
-            break;
-        };
-
-        dialoguer::console::Term::stderr().clear_screen()?;
-
-        let Some(choice) = choice else {
-            continue;
-        };
-
-        match choice {
-            0 => create_manual_backup()?,
-            1 => restore_backup()?,
-            2 => break,
-            _ => {}
-        }
-    }
-
-    info!("Shutting down...");
-
-    'exit_backup: {
-        // If autobackup is paused, do not request an exit backup,
-        // as that means a backup or restore is in progress.
-        if pause_autobackup.load(Ordering::SeqCst) {
-            break 'exit_backup;
-        }
-
-        let last_backup_at = last_backup_at.lock().unwrap();
-        let last_change_at = last_change_at.lock().unwrap();
-
-        let Some(last_change_at) = *last_change_at else {
-            break 'exit_backup;
-        };
-
-        if let Some(last_backup_at) = *last_backup_at {
-            if last_backup_at > last_change_at {
-                break 'exit_backup;
-            }
-        }
-
-        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-        let archive_name = format!("Exit {}.7z", now.format(ARCHIVE_DATE_FORMAT).unwrap());
-
-        backup_tx.send(BackupRequest::CreateBackup { archive_name })?;
-    }
-
-    // Signal cancellation
-    cancel.store(true, Ordering::SeqCst);
-
-    drop(watcher);
-    drop(backup_tx);
-
-    // Wait for threads to complete
-    watcher_join_handle.join().unwrap();
-    autobackup_join_handle.join().unwrap();
-    backup_join_handle.join().unwrap();
-
-    // If a copy_latest_to_path is set, and a backup was created this session,
-    // copy the latest backup to the specified path.
-    'copy_latest: {
-        if let Some(copy_latest_to_path) = gcfg.copy_latest_to_path {
-            let latest_backup_path = latest_backup_path.lock().unwrap();
-            if let Some(latest_backup_path) = latest_backup_path.as_ref() {
-                let Some(filename) = latest_backup_path.file_name() else {
-                    break 'copy_latest;
+                let Some(last_change_at) = *last_change_at else {
+                    break 'exit_backup;
                 };
 
-                fs::copy(latest_backup_path, copy_latest_to_path.join(filename))?;
-            }
-        }
-    }
+                if let Some(last_backup_at) = *last_backup_at {
+                    if last_backup_at > last_change_at {
+                        break 'exit_backup;
+                    }
+                }
 
-    Ok(())
+                let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+                let archive_name = format!("Exit {}.7z", now.format(ARCHIVE_DATE_FORMAT).unwrap());
+
+                backup_tx.send(BackupRequest::CreateBackup { archive_name }).unwrap();
+            }
+
+            drop(watcher);
+            drop(backup_tx);
+
+            // Wait for threads to complete
+            watcher_join_handle.join().unwrap();
+            autobackup_join_handle.join().unwrap();
+            backup_join_handle.join().unwrap();
+            // If a copy_latest_to_path is set, and a backup was created this session,
+            // copy the latest backup to the specified path.
+            'copy_latest: {
+                if let Some(copy_latest_to_path) = gcfg.copy_latest_to_path {
+                    let latest_backup_path = latest_backup_path.lock().unwrap();
+                    if let Some(latest_backup_path) = latest_backup_path.as_ref() {
+                        let Some(filename) = latest_backup_path.file_name() else {
+                            break 'copy_latest;
+                        };
+
+                        fs::copy(latest_backup_path, copy_latest_to_path.join(filename)).unwrap();
+                    }
+                }
+            }
+        })
+    };
+
+    Ok((engine_join_handle, backup_tx))
 }
 
 fn create_archive(src: &Path, archive_path: &Path) -> Result<(), anyhow::Error> {
