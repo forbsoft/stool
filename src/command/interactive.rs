@@ -8,11 +8,10 @@ use std::{
 };
 
 use anyhow::Context;
-use time::OffsetDateTime;
 use tracing::{error, info};
 
 use crate::{
-    engine::{self, BackupRequest, ARCHIVE_DATE_FORMAT},
+    engine::{self, make_backup_filename, BackupRequest},
     ui::FancyUiHandler,
 };
 
@@ -41,15 +40,12 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
     // Interactive prompt
 
     let create_manual_backup = || -> Result<(), anyhow::Error> {
-        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-        let default_name = format!("Manual {}", now.format(ARCHIVE_DATE_FORMAT).unwrap());
-
-        let name: String = dialoguer::Input::new()
-            .with_prompt("Backup name")
-            .default(default_name)
+        let description: String = dialoguer::Input::new()
+            .with_prompt("Backup description")
+            .default("Manual".into())
             .interact_text()?;
 
-        let archive_name = format!("{name}.7z");
+        let archive_name = make_backup_filename(&description);
 
         backup_tx.send(BackupRequest::CreateBackup { archive_name })?;
 

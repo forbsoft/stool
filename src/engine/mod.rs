@@ -332,9 +332,7 @@ pub fn run(
 
             info!("Creating auto-backup");
 
-            let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-            let archive_name = format!("Auto {}.7z", now.format(ARCHIVE_DATE_FORMAT).unwrap());
-
+            let archive_name = make_backup_filename("Auto");
             backup_tx.send(BackupRequest::CreateBackup { archive_name }).unwrap();
         })
     };
@@ -409,8 +407,7 @@ pub fn run(
                     }
                 }
 
-                let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-                let archive_name = format!("Exit {}.7z", now.format(ARCHIVE_DATE_FORMAT).unwrap());
+                let archive_name = make_backup_filename("Exit");
 
                 backup_tx.send(BackupRequest::CreateBackup { archive_name }).unwrap();
             }
@@ -440,6 +437,12 @@ pub fn run(
     };
 
     Ok((engine_join_handle, backup_tx))
+}
+
+pub fn make_backup_filename(description: &str) -> String {
+    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+
+    format!("{} {description}.7z", now.format(ARCHIVE_DATE_FORMAT).unwrap())
 }
 
 fn create_archive(src: &Path, archive_path: &Path) -> Result<(), anyhow::Error> {
