@@ -32,6 +32,11 @@ enum Command {
         #[clap(help = "Game command")]
         game_command: Vec<String>,
     },
+    #[clap(about = "Run stool in TUI mode")]
+    Tui {
+        #[clap(help = "Game name")]
+        name: String,
+    },
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -51,6 +56,7 @@ fn main() -> Result<(), anyhow::Error> {
         Command::RunGame { name, game_command } => {
             command::rungame(&name, &game_config_path, &config.data_path, game_command)
         }
+        Command::Tui { name } => command::tui(&name, &game_config_path, &config.data_path),
     }?;
 
     Ok(())
