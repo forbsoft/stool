@@ -6,7 +6,6 @@ mod ui;
 
 use anyhow::Context;
 use clap::Parser;
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 #[derive(Debug, Parser)]
 #[clap(name = "stool", version = env!("CARGO_PKG_VERSION"), author = env!("CARGO_PKG_AUTHORS"))]
@@ -32,13 +31,15 @@ enum Command {
         #[clap(help = "Game command")]
         game_command: Vec<String>,
     },
+    #[clap(about = "Run stool in TUI mode")]
+    Tui {
+        #[clap(help = "Game name")]
+        name: String,
+    },
 }
 
 fn main() -> Result<(), anyhow::Error> {
     let opt = Opt::parse();
-
-    // Initialize logging
-    initialize_logging();
 
     let config_path = self::config::main::get_default_config_path().context("Getting default config path")?;
     let game_config_path = config_path.join("games");
@@ -51,15 +52,8 @@ fn main() -> Result<(), anyhow::Error> {
         Command::RunGame { name, game_command } => {
             command::rungame(&name, &game_config_path, &config.data_path, game_command)
         }
+        Command::Tui { name } => command::tui(&name, &game_config_path, &config.data_path),
     }?;
 
     Ok(())
-}
-
-fn initialize_logging() {
-    let subscriber = FmtSubscriber::builder()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber).expect("Setting default tracing subscriber failed!");
 }
