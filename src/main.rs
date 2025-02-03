@@ -3,7 +3,6 @@ mod config;
 mod engine;
 mod internal;
 mod tui;
-mod ui;
 
 use anyhow::Context;
 use clap::Parser;
@@ -17,11 +16,6 @@ struct Opt {
 
 #[derive(Debug, Parser)]
 enum Command {
-    #[clap(about = "Run stool interactively")]
-    Interactive {
-        #[clap(help = "Game name")]
-        name: String,
-    },
     #[clap(about = "Create a new game config")]
     New,
     #[clap(about = "Run game via stool")]
@@ -48,7 +42,6 @@ fn main() -> Result<(), anyhow::Error> {
     let config = self::config::main::MainConfig::load_or_write_default_from_location(&config_path)?;
 
     match opt.command {
-        Command::Interactive { name } => command::interactive(&name, &game_config_path, &config.data_path),
         Command::New => command::new(&game_config_path),
         Command::RunGame { name, game_command } => {
             command::rungame(&name, &game_config_path, &config.data_path, game_command)
