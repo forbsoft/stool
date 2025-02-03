@@ -21,21 +21,21 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
 
     let ui = FancyUiHandler::new();
 
-    // Cancellation boolean.
-    let cancel = Arc::new(AtomicBool::new(false));
+    // Shutdown signal
+    let shutdown = Arc::new(AtomicBool::new(false));
 
     // Set break (Ctrl-C) handler.
     ctrlc::set_handler({
-        let cancel = cancel.clone();
+        let shutdown = shutdown.clone();
 
         move || {
-            info!("Cancellation requested by user.");
-            cancel.store(true, Ordering::SeqCst);
+            info!("Shutdown requested by user.");
+            shutdown.store(true, Ordering::SeqCst);
         }
     })
     .unwrap_or_else(|err| error!("Error setting Ctrl-C handler: {}", err));
 
-    let (engine_join_handle, backup_tx) = engine::run(name, game_config_path, data_path, cancel.clone(), ui)?;
+    let (engine_join_handle, backup_tx) = engine::run(name, game_config_path, data_path, shutdown.clone(), ui)?;
 
     // Interactive prompt
 
@@ -137,7 +137,7 @@ pub fn interactive(name: &str, game_config_path: &Path, data_path: &Path) -> Res
         }
     }
 
-    cancel.store(true, Ordering::SeqCst);
+    shutdown.store(true, Ordering::SeqCst);
 
     drop(backup_tx);
 

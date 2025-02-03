@@ -18,17 +18,17 @@ pub fn rungame(
 ) -> Result<(), anyhow::Error> {
     let ui = FancyUiHandler::new();
 
-    // Cancellation boolean.
-    let cancel = Arc::new(AtomicBool::new(false));
+    // Shutdown signal
+    let shutdown = Arc::new(AtomicBool::new(false));
 
-    let (engine_join_handle, backup_tx) = engine::run(name, game_config_path, data_path, cancel.clone(), ui)?;
+    let (engine_join_handle, backup_tx) = engine::run(name, game_config_path, data_path, shutdown.clone(), ui)?;
 
     let (program, args) = game_command.split_first().context("Couldn't split game command")?;
 
     // Run game
     std::process::Command::new(program).args(args).status()?;
 
-    cancel.store(true, Ordering::SeqCst);
+    shutdown.store(true, Ordering::SeqCst);
     drop(backup_tx);
 
     // Wait for engine to shut down gracefully

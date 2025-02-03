@@ -40,7 +40,7 @@ pub fn run(
     name: &str,
     game_config_path: &Path,
     data_path: &Path,
-    cancel: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
     mut ui: impl StoolUiHandler,
 ) -> Result<(std::thread::JoinHandle<()>, Sender<BackupRequest>), anyhow::Error> {
     let file_name = format!("{name}.toml");
@@ -271,7 +271,7 @@ pub fn run(
 
     // Auto-backup thread
     let autobackup_join_handle = {
-        let cancel = cancel.clone();
+        let shutdown = shutdown.clone();
 
         let backup_interval = Duration::from_secs(gcfg.backup_interval);
 
@@ -284,7 +284,7 @@ pub fn run(
         let mut last_autobackup_at: Option<Instant> = None;
 
         std::thread::spawn(move || loop {
-            if cancel.load(Ordering::SeqCst) {
+            if shutdown.load(Ordering::SeqCst) {
                 break;
             }
 
@@ -341,7 +341,7 @@ pub fn run(
 
     // Watch save directory for changes
     let (watcher_join_handle, watcher) = {
-        let cancel = cancel.clone();
+        let shutdown = shutdown.clone();
 
         let last_change_at = last_change_at.clone();
 
@@ -354,7 +354,7 @@ pub fn run(
 
         let join_handle = std::thread::spawn(move || {
             for result in &rx {
-                if cancel.load(Ordering::SeqCst) {
+                if shutdown.load(Ordering::SeqCst) {
                     break;
                 }
 
@@ -383,7 +383,7 @@ pub fn run(
         std::thread::spawn(move || {
             let _pid_lock = pid_lock;
 
-            while !cancel.load(Ordering::SeqCst) {
+            while !shutdown.load(Ordering::SeqCst) {
                 std::thread::sleep(SLEEP_DURATION);
             }
 

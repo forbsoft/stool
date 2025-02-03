@@ -30,10 +30,10 @@ pub fn tui(name: &str, game_config_path: &Path, data_path: &Path) -> Result<(), 
     let app_state = Arc::new(Mutex::new(AppState::default()));
     let ui = TuiUiHandler::new(app_state.clone());
 
-    // Cancellation boolean.
-    let cancel = Arc::new(AtomicBool::new(false));
+    // Shutdown signal
+    let shutdown = Arc::new(AtomicBool::new(false));
 
-    let (engine_join_handle, backup_tx) = engine::run(name, game_config_path, data_path, cancel.clone(), ui)?;
+    let (engine_join_handle, backup_tx) = engine::run(name, game_config_path, data_path, shutdown.clone(), ui)?;
 
     // TUI START
 
@@ -51,7 +51,7 @@ pub fn tui(name: &str, game_config_path: &Path, data_path: &Path) -> Result<(), 
 
     // TUI END
 
-    cancel.store(true, Ordering::SeqCst);
+    shutdown.store(true, Ordering::SeqCst);
 
     drop(backup_tx);
 
