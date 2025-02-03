@@ -51,6 +51,8 @@ pub fn run(
 
     let output_path = data_path.join(name);
 
+    fs::create_dir_all(&output_path)?;
+
     let pid_lock = PidLock::acquire(output_path.join("stool.pid")).context("Acquiring PID-lock")?;
 
     let staging_path = output_path.join("staging");
@@ -419,6 +421,7 @@ pub fn run(
             watcher_join_handle.join().unwrap();
             autobackup_join_handle.join().unwrap();
             backup_join_handle.join().unwrap();
+
             // If a copy_latest_to_path is set, and a backup was created this session,
             // copy the latest backup to the specified path.
             'copy_latest: {
