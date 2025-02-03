@@ -15,7 +15,7 @@ use std::{
 use anyhow::Context;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use time::{format_description::BorrowedFormatItem, macros::format_description, OffsetDateTime};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use ui::StoolUiHandler;
 
 use crate::internal::{filter, pid::PidLock, sync};
@@ -360,8 +360,6 @@ pub fn run(
 
                 match result {
                     Ok(event) => {
-                        debug!("Event {event:?}");
-
                         if event.kind.is_access() {
                             continue;
                         }

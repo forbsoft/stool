@@ -9,10 +9,7 @@ mod uihandler;
 
 use std::{
     path::Path,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
 use state::AppState;
@@ -35,8 +32,6 @@ pub fn tui(name: &str, game_config_path: &Path, data_path: &Path) -> Result<(), 
 
     let (engine_join_handle, backup_tx) = engine::run(name, game_config_path, data_path, shutdown.clone(), ui)?;
 
-    // TUI START
-
     tui_logger::init_logger(tui_logger::LevelFilter::Debug)?;
     tui_logger::set_default_level(tui_logger::LevelFilter::Info);
 
@@ -45,18 +40,9 @@ pub fn tui(name: &str, game_config_path: &Path, data_path: &Path) -> Result<(), 
         .init();
 
     let terminal = ratatui::init();
-    let result = App::new(app_state, backup_tx.clone(), backup_path).run(terminal);
+    let result = App::new(app_state, backup_tx, backup_path, shutdown.clone(), engine_join_handle).run(terminal);
     ratatui::restore();
     result?;
-
-    // TUI END
-
-    shutdown.store(true, Ordering::SeqCst);
-
-    drop(backup_tx);
-
-    // Wait for engine to shut down gracefully
-    engine_join_handle.join().unwrap();
 
     Ok(())
 }

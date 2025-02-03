@@ -5,7 +5,7 @@ use ratatui::{
     style::Stylize,
     symbols,
     text::Line,
-    widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState, Padding, StatefulWidget, Widget},
+    widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState, StatefulWidget, Widget},
 };
 
 use crate::engine::BackupRequest;
@@ -108,8 +108,7 @@ impl Widget for &mut RestoreBackupView {
             .title(title)
             .borders(Borders::all())
             .border_set(symbols::border::ROUNDED)
-            .border_style(LIST_BORDER_COLOR)
-            .padding(Padding::top(1));
+            .border_style(LIST_BORDER_COLOR);
 
         let items: Vec<ListItem> = self
             .items
