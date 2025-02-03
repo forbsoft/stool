@@ -1,5 +1,8 @@
 use ratatui::{
-    style::{Color, Style},
+    style::{
+        palette::tailwind::{BLUE, GREEN, PINK, RED, YELLOW},
+        Style,
+    },
     symbols,
     text::Line,
     widgets::{Block, Borders, Widget},
@@ -8,11 +11,11 @@ use tui_logger::{TuiLoggerLevelOutput, TuiLoggerWidget, TuiWidgetState};
 
 use super::style::LOG_BORDER_COLOR;
 
-const STYLE_ERROR: Style = Style::new().fg(Color::Red);
-const STYLE_WARN: Style = Style::new().fg(Color::Yellow);
-const STYLE_INFO: Style = Style::new().fg(Color::Cyan);
-const STYLE_DEBUG: Style = Style::new().fg(Color::Green);
-const STYLE_TRACE: Style = Style::new().fg(Color::Magenta);
+const STYLE_ERROR: Style = Style::new().fg(RED.c600);
+const STYLE_WARN: Style = Style::new().fg(YELLOW.c400);
+const STYLE_INFO: Style = Style::new().fg(BLUE.c400);
+const STYLE_DEBUG: Style = Style::new().fg(GREEN.c600);
+const STYLE_TRACE: Style = Style::new().fg(PINK.c600);
 
 #[derive(Default)]
 pub struct Log {
