@@ -7,7 +7,9 @@ pub fn tui(name: &str, game_config_path: &Path, data_path: &Path) -> Result<(), 
     // Shutdown signal
     let shutdown = Arc::new(AtomicBool::new(false));
 
-    crate::tui::run(name, game_config_path, data_path, shutdown)?;
+    let autobackup = Arc::new(AtomicBool::new(true));
+
+    crate::tui::run(name, game_config_path, data_path, autobackup, shutdown)?;
 
     Ok(())
 }

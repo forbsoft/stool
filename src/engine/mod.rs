@@ -40,6 +40,7 @@ pub fn run(
     name: &str,
     game_config_path: &Path,
     data_path: &Path,
+    autobackup: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     mut ui: impl StoolUiHandler,
 ) -> Result<(std::thread::JoinHandle<()>, Sender<BackupRequest>), anyhow::Error> {
@@ -290,7 +291,7 @@ pub fn run(
 
             std::thread::sleep(Duration::from_secs(1));
 
-            if pause_autobackup.load(Ordering::SeqCst) {
+            if !autobackup.load(Ordering::SeqCst) || pause_autobackup.load(Ordering::SeqCst) {
                 continue;
             }
 

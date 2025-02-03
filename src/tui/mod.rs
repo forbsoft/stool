@@ -24,6 +24,7 @@ pub fn run(
     name: &str,
     game_config_path: &Path,
     data_path: &Path,
+    autobackup: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<(), anyhow::Error> {
     let output_path = data_path.join(name);
@@ -32,7 +33,14 @@ pub fn run(
     let app_state = Arc::new(Mutex::new(AppState::default()));
     let ui = TuiUiHandler::new(app_state.clone());
 
-    let (engine_join_handle, backup_tx) = engine::run(name, game_config_path, data_path, shutdown.clone(), ui)?;
+    let (engine_join_handle, backup_tx) = engine::run(
+        name,
+        game_config_path,
+        data_path,
+        autobackup.clone(),
+        shutdown.clone(),
+        ui,
+    )?;
 
     tui_logger::init_logger(tui_logger::LevelFilter::Debug)?;
     tui_logger::set_default_level(tui_logger::LevelFilter::Info);
@@ -42,7 +50,15 @@ pub fn run(
         .init();
 
     let terminal = ratatui::init();
-    let result = App::new(app_state, backup_tx, backup_path, shutdown.clone(), engine_join_handle).run(terminal);
+    let result = App::new(
+        app_state,
+        backup_tx,
+        backup_path,
+        autobackup,
+        shutdown,
+        engine_join_handle,
+    )
+    .run(terminal);
     ratatui::restore();
     result?;
 

@@ -27,7 +27,10 @@ use super::{
     menu_view::{MenuItem, MenuView},
     restore_backup_view::RestoreBackupView,
     state::AppState,
-    style::{HEADER_STYLE, PROGRESS_BAR_BG_COLOR, PROGRESS_BAR_STYLE},
+    style::{
+        FOOTER_AUTOBACKUP_OFF_STYLE, FOOTER_AUTOBACKUP_ON_STYLE, HEADER_STYLE, PROGRESS_BAR_BG_COLOR,
+        PROGRESS_BAR_STYLE,
+    },
 };
 
 const EVENT_POLL_DURATION: Duration = Duration::from_millis(100);
@@ -45,6 +48,7 @@ pub struct App<'a> {
     state: Arc<Mutex<AppState>>,
     backup_tx: Option<Sender<BackupRequest>>,
     backup_path: PathBuf,
+    autobackup: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     engine_join_handle: JoinHandle<()>,
 
@@ -61,6 +65,7 @@ impl App<'_> {
         state: Arc<Mutex<AppState>>,
         backup_tx: Sender<BackupRequest>,
         backup_path: PathBuf,
+        autobackup: Arc<AtomicBool>,
         shutdown: Arc<AtomicBool>,
         engine_join_handle: JoinHandle<()>,
     ) -> Self {
@@ -68,6 +73,7 @@ impl App<'_> {
             state,
             backup_tx: Some(backup_tx),
             backup_path,
+            autobackup,
             shutdown,
             engine_join_handle,
 
@@ -189,7 +195,10 @@ impl App<'_> {
 
         match (key.modifiers, key.code) {
             (_, KeyCode::Char('q')) => self.quit(),
-            (_, KeyCode::Esc) => self.view = View::Menu,
+            // F12 to toggle Autobackup
+            (_, KeyCode::F(12)) => self
+                .autobackup
+                .store(!self.autobackup.load(Ordering::SeqCst), Ordering::SeqCst),
             _ => {
                 self.menu_view.on_key_event(key);
 
@@ -283,22 +292,30 @@ impl Widget for &mut App<'_> {
 
         self.log_widget.render(log_area, buf);
 
-        if let Some(action) = self.state.lock().unwrap().current_action.as_ref() {
-            let [_, progress_area, _] = Layout::horizontal([
-                Constraint::Percentage(10),
-                Constraint::Fill(1),
-                Constraint::Percentage(10),
-            ])
-            .areas(footer_area);
+        let [autobackup_area, _, action_area] =
+            Layout::horizontal([Constraint::Length(16), Constraint::Length(1), Constraint::Fill(1)]).areas(footer_area);
 
+        let (autobackup_text, autobackup_style) = if self.autobackup.load(Ordering::SeqCst) {
+            ("ON ", FOOTER_AUTOBACKUP_ON_STYLE)
+        } else {
+            ("OFF", FOOTER_AUTOBACKUP_OFF_STYLE)
+        };
+
+        Paragraph::new(format!("Autobackup {autobackup_text}"))
+            .style(autobackup_style)
+            .bold()
+            .centered()
+            .render(autobackup_area, buf);
+
+        if let Some(action) = self.state.lock().unwrap().current_action.as_ref() {
             Gauge::default()
                 .gauge_style(PROGRESS_BAR_STYLE)
                 .bg(PROGRESS_BAR_BG_COLOR)
                 .label(action.describe())
                 .ratio(action.progress.get() as f64)
-                .render(progress_area, buf);
+                .render(action_area, buf);
         } else {
-            Line::raw("Idle").centered().render(footer_area, buf);
+            Line::raw("Idle").centered().render(action_area, buf);
         };
     }
 }

@@ -33,7 +33,9 @@ pub fn rungame(
         })
     };
 
-    crate::tui::run(name, game_config_path, data_path, shutdown)?;
+    let autobackup = Arc::new(AtomicBool::new(true));
+
+    crate::tui::run(name, game_config_path, data_path, autobackup, shutdown)?;
 
     game_join_handle.join().unwrap()?;
 

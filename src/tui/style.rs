@@ -17,6 +17,9 @@ pub const MENU_HIGHLIGHT_STYLE: Style = Style::new().fg(Color::LightGreen);
 pub const PROGRESS_BAR_STYLE: Color = Color::Blue;
 pub const PROGRESS_BAR_BG_COLOR: Color = Color::Rgb(20, 20, 20);
 
+pub const FOOTER_AUTOBACKUP_ON_STYLE: Style = Style::new().bg(Color::Green);
+pub const FOOTER_AUTOBACKUP_OFF_STYLE: Style = Style::new().bg(Color::Red);
+
 pub const fn list_item_color(i: usize) -> Color {
     if i % 2 == 0 {
         LIST_ITEM_BG
