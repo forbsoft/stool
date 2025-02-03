@@ -2,6 +2,7 @@ mod command;
 mod config;
 mod engine;
 mod internal;
+mod tui;
 mod ui;
 
 use anyhow::Context;

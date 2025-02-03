@@ -8,31 +8,34 @@ use std::{
 
 use anyhow::Context;
 
-use crate::{engine, ui::FancyUiHandler};
-
 pub fn rungame(
     name: &str,
     game_config_path: &Path,
     data_path: &Path,
     game_command: Vec<String>,
 ) -> Result<(), anyhow::Error> {
-    let ui = FancyUiHandler::new();
-
     // Shutdown signal
     let shutdown = Arc::new(AtomicBool::new(false));
 
-    let (engine_join_handle, backup_tx) = engine::run(name, game_config_path, data_path, shutdown.clone(), ui)?;
+    let game_join_handle = {
+        let shutdown = shutdown.clone();
 
-    let (program, args) = game_command.split_first().context("Couldn't split game command")?;
+        std::thread::spawn(move || -> Result<(), anyhow::Error> {
+            let (program, args) = game_command.split_first().context("Couldn't split game command")?;
 
-    // Run game
-    std::process::Command::new(program).args(args).status()?;
+            // Run game
+            let result = std::process::Command::new(program).args(args).status();
 
-    shutdown.store(true, Ordering::SeqCst);
-    drop(backup_tx);
+            shutdown.store(true, Ordering::SeqCst);
 
-    // Wait for engine to shut down gracefully
-    engine_join_handle.join().unwrap();
+            result?;
+            Ok(())
+        })
+    };
+
+    crate::tui::run(name, game_config_path, data_path, shutdown)?;
+
+    game_join_handle.join().unwrap()?;
 
     Ok(())
 }

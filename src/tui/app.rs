@@ -100,14 +100,20 @@ impl App<'_> {
         let mut shutting_down = false;
 
         loop {
-            if !shutting_down && self.view == View::Shutdown {
-                // Signal engine shutdown
-                self.shutdown.store(true, Ordering::SeqCst);
-                self.backup_tx = None;
+            if !shutting_down {
+                if self.shutdown.load(Ordering::SeqCst) {
+                    self.view = View::Shutdown;
+                }
 
-                self.destroy_views();
+                if self.view == View::Shutdown {
+                    // Signal engine shutdown
+                    self.shutdown.store(true, Ordering::SeqCst);
+                    self.backup_tx = None;
 
-                shutting_down = true;
+                    self.destroy_views();
+
+                    shutting_down = true;
+                }
             } else if shutting_down && self.engine_join_handle.is_finished() {
                 break;
             }

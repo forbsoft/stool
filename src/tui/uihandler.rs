@@ -5,9 +5,9 @@ use std::{
 
 use tracing::info;
 
-use crate::{command::tui::state::Action, engine::ui::StoolUiHandler, internal::sync::SyncUiHandler};
+use crate::{engine::ui::StoolUiHandler, internal::sync::SyncUiHandler};
 
-use super::state::{ActionKind, AppState, Progress};
+use super::state::{Action, ActionKind, AppState, Progress};
 
 pub struct TuiUiHandler {
     state: Arc<Mutex<AppState>>,

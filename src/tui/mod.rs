@@ -20,15 +20,17 @@ use crate::engine;
 
 use self::app::App;
 
-pub fn tui(name: &str, game_config_path: &Path, data_path: &Path) -> Result<(), anyhow::Error> {
+pub fn run(
+    name: &str,
+    game_config_path: &Path,
+    data_path: &Path,
+    shutdown: Arc<AtomicBool>,
+) -> Result<(), anyhow::Error> {
     let output_path = data_path.join(name);
     let backup_path = output_path.join("backups");
 
     let app_state = Arc::new(Mutex::new(AppState::default()));
     let ui = TuiUiHandler::new(app_state.clone());
-
-    // Shutdown signal
-    let shutdown = Arc::new(AtomicBool::new(false));
 
     let (engine_join_handle, backup_tx) = engine::run(name, game_config_path, data_path, shutdown.clone(), ui)?;
 
