@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::Context;
+use tracing::{error, info};
 
 pub fn rungame(
     name: &str,
@@ -16,6 +17,17 @@ pub fn rungame(
 ) -> Result<(), anyhow::Error> {
     // Shutdown signal
     let shutdown = Arc::new(AtomicBool::new(false));
+
+    // Set break (Ctrl-C) handler.
+    ctrlc::set_handler({
+        let shutdown = shutdown.clone();
+
+        move || {
+            info!("Shutdown requested by user.");
+            shutdown.store(true, Ordering::SeqCst);
+        }
+    })
+    .unwrap_or_else(|err| error!("Error setting Ctrl-C handler: {}", err));
 
     let game_join_handle = {
         let shutdown = shutdown.clone();
