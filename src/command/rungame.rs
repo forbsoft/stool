@@ -1,5 +1,6 @@
 use std::{
     env,
+    process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -77,6 +78,9 @@ pub fn rungame(engine_args: EngineArgs, game_command: Vec<String>) -> Result<(),
                 .env_clear()
                 .envs(env_vars)
                 .envs(passthrough_env_vars)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
                 .status();
 
             shutdown.store(true, Ordering::SeqCst);
