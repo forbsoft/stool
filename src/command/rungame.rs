@@ -1,4 +1,5 @@
 use std::{
+    env,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -14,6 +15,7 @@ use crate::{
     tui::{AppState, TuiUiHandler},
 };
 
+const STOOL_PASSTHROUGH_PREFIX: &str = "STOOL_PASSTHROUGH_";
 const WAIT_SLEEP_DURATION: Duration = Duration::from_secs(1);
 
 pub fn rungame(engine_args: EngineArgs, game_command: Vec<String>) -> Result<(), anyhow::Error> {
@@ -46,11 +48,36 @@ pub fn rungame(engine_args: EngineArgs, game_command: Vec<String>) -> Result<(),
     let game_join_handle = {
         let shutdown = shutdown.clone();
 
+        let mut env_vars: Vec<_> = env::vars_os().collect();
+
+        // Process pass-through variables
+        let passthrough_env_vars: Vec<_> = env_vars
+            .iter()
+            .filter_map(|(k, v)| {
+                k.to_str()
+                    .and_then(|k| k.strip_prefix(STOOL_PASSTHROUGH_PREFIX))
+                    .map(|k| (k.to_owned(), v.to_owned()))
+            })
+            .collect();
+
+        // Remove pass-through prefixed variables from the main
+        // environment variables
+        env_vars.retain(|(k, _)| {
+            k.to_str()
+                .map(|k| !k.starts_with(STOOL_PASSTHROUGH_PREFIX))
+                .unwrap_or(true)
+        });
+
         std::thread::spawn(move || -> Result<(), anyhow::Error> {
             let (program, args) = game_command.split_first().context("Couldn't split game command")?;
 
             // Run game
-            let result = std::process::Command::new(program).args(args).status();
+            let result = std::process::Command::new(program)
+                .args(args)
+                .env_clear()
+                .envs(env_vars)
+                .envs(passthrough_env_vars)
+                .status();
 
             shutdown.store(true, Ordering::SeqCst);
 
