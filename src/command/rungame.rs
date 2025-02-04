@@ -1,20 +1,14 @@
-use std::{
-    path::Path,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 
 use anyhow::Context;
 use tracing::{error, info};
 
-pub fn rungame(
-    name: &str,
-    game_config_path: &Path,
-    data_path: &Path,
-    game_command: Vec<String>,
-) -> Result<(), anyhow::Error> {
+use crate::engine::EngineArgs;
+
+pub fn rungame(engine_args: EngineArgs, game_command: Vec<String>) -> Result<(), anyhow::Error> {
     // Shutdown signal
     let shutdown = Arc::new(AtomicBool::new(false));
 
@@ -45,9 +39,7 @@ pub fn rungame(
         })
     };
 
-    let autobackup = Arc::new(AtomicBool::new(true));
-
-    crate::tui::run(name, game_config_path, data_path, autobackup, shutdown)?;
+    crate::tui::run(engine_args, shutdown)?;
 
     game_join_handle.join().unwrap()?;
 

@@ -6,6 +6,7 @@ mod tui;
 
 use anyhow::Context;
 use clap::Parser;
+use engine::EngineArgs;
 
 #[derive(Debug, Parser)]
 #[clap(name = "stool", version = env!("CARGO_PKG_VERSION"), author = env!("CARGO_PKG_AUTHORS"))]
@@ -41,12 +42,27 @@ fn main() -> Result<(), anyhow::Error> {
 
     let config = self::config::main::MainConfig::load_or_write_default_from_location(&config_path)?;
 
+    let data_path = config.data_path;
+
     match opt.command {
         Command::New => command::new(&game_config_path),
         Command::RunGame { name, game_command } => {
-            command::rungame(&name, &game_config_path, &config.data_path, game_command)
+            let engine_args = EngineArgs {
+                name,
+                game_config_path,
+                data_path,
+            };
+            command::rungame(engine_args, game_command)
         }
-        Command::Tui { name } => command::tui(&name, &game_config_path, &config.data_path),
+        Command::Tui { name } => {
+            let engine_args = EngineArgs {
+                name,
+                game_config_path,
+                data_path,
+            };
+
+            command::tui(engine_args)
+        }
     }?;
 
     Ok(())

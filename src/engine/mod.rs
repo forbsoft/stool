@@ -4,11 +4,13 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Stdio,
+    rc::{Rc, Weak},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::Sender,
         Arc, Mutex,
     },
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 
@@ -30,20 +32,86 @@ pub enum BackupRequest {
     RestoreBackup { archive_name: String },
 }
 
+pub struct EngineArgs {
+    pub name: String,
+    pub game_config_path: PathBuf,
+    pub data_path: PathBuf,
+}
+
+/// Represents a running instance of an S-Tool engine.
+pub struct Engine {
+    shutdown: Arc<AtomicBool>,
+    autobackup: Arc<AtomicBool>,
+    backup_tx: Option<Rc<Sender<BackupRequest>>>,
+    join_handle: JoinHandle<()>,
+}
+
+/// Exposes various functions to allow limited
+/// interactions with a running S-Tool engine.
+#[derive(Clone)]
+pub struct EngineControl {
+    autobackup: Arc<AtomicBool>,
+    backup_tx: Option<Weak<Sender<BackupRequest>>>,
+}
+
 struct InternalGameSavePath {
     pub name: String,
     pub path: PathBuf,
     pub ignore_globset: Option<globset::GlobSet>,
 }
 
-pub fn run(
-    name: &str,
-    game_config_path: &Path,
-    data_path: &Path,
-    autobackup: Arc<AtomicBool>,
-    shutdown: Arc<AtomicBool>,
-    mut ui: impl StoolUiHandler,
-) -> Result<(std::thread::JoinHandle<()>, Sender<BackupRequest>), anyhow::Error> {
+impl Engine {
+    /// Request shutdown of engine
+    pub fn shutdown(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        self.backup_tx = None;
+    }
+
+    pub fn control(&self) -> EngineControl {
+        let autobackup = self.autobackup.clone();
+        let backup_tx = self.backup_tx.as_ref().map(Rc::downgrade);
+
+        EngineControl { autobackup, backup_tx }
+    }
+
+    pub fn has_shut_down(&self) -> bool {
+        self.join_handle.is_finished()
+    }
+
+    /// Wait for engine thread to finish
+    pub fn join(self) {
+        self.join_handle.join().unwrap();
+    }
+}
+
+impl EngineControl {
+    pub fn get_autobackup(&self) -> bool {
+        self.autobackup.load(Ordering::SeqCst)
+    }
+
+    pub fn set_autobackup(&self, val: bool) {
+        self.autobackup.store(val, Ordering::SeqCst);
+    }
+
+    /// Request a backup operation
+    pub fn send(&self, req: BackupRequest) -> Result<(), anyhow::Error> {
+        let Some(Some(backup_tx)) = self.backup_tx.as_ref().map(Weak::upgrade) else {
+            return Ok(());
+        };
+
+        backup_tx.send(req)?;
+
+        Ok(())
+    }
+}
+
+pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHandler) -> Result<Engine, anyhow::Error> {
+    let EngineArgs {
+        name,
+        game_config_path,
+        data_path,
+    } = args;
+
     let file_name = format!("{name}.toml");
     let file_path = game_config_path.join(&file_name);
 
@@ -65,6 +133,7 @@ pub fn run(
 
     let pause_autobackup = Arc::new(AtomicBool::new(false));
 
+    let autobackup = Arc::new(AtomicBool::new(true));
     let (backup_tx, backup_rx) = std::sync::mpsc::channel::<BackupRequest>();
 
     // Backup thread
@@ -273,6 +342,7 @@ pub fn run(
     // Auto-backup thread
     let autobackup_join_handle = {
         let shutdown = shutdown.clone();
+        let autobackup = autobackup.clone();
 
         let backup_interval = Duration::from_secs(gcfg.backup_interval);
 
@@ -377,6 +447,7 @@ pub fn run(
     };
 
     let engine_join_handle = {
+        let shutdown = shutdown.clone();
         let backup_tx = backup_tx.clone();
 
         std::thread::spawn(move || {
@@ -438,7 +509,14 @@ pub fn run(
         })
     };
 
-    Ok((engine_join_handle, backup_tx))
+    let backup_tx = Some(Rc::new(backup_tx));
+
+    Ok(Engine {
+        shutdown,
+        autobackup,
+        backup_tx,
+        join_handle: engine_join_handle,
+    })
 }
 
 pub fn make_backup_filename(description: &str) -> String {

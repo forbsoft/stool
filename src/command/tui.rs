@@ -1,14 +1,13 @@
-use std::{
-    path::Path,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 
 use tracing::{error, info};
 
-pub fn tui(name: &str, game_config_path: &Path, data_path: &Path) -> Result<(), anyhow::Error> {
+use crate::engine::EngineArgs;
+
+pub fn tui(engine_args: EngineArgs) -> Result<(), anyhow::Error> {
     // Shutdown signal
     let shutdown = Arc::new(AtomicBool::new(false));
 
@@ -23,9 +22,7 @@ pub fn tui(name: &str, game_config_path: &Path, data_path: &Path) -> Result<(), 
     })
     .unwrap_or_else(|err| error!("Error setting Ctrl-C handler: {}", err));
 
-    let autobackup = Arc::new(AtomicBool::new(true));
-
-    crate::tui::run(name, game_config_path, data_path, autobackup, shutdown)?;
+    crate::tui::run(engine_args, shutdown)?;
 
     Ok(())
 }

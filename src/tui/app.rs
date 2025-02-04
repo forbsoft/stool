@@ -2,10 +2,8 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::Sender,
         Arc, Mutex,
     },
-    thread::JoinHandle,
     time::Duration,
 };
 
@@ -19,7 +17,7 @@ use ratatui::{
     DefaultTerminal,
 };
 
-use crate::engine::BackupRequest;
+use crate::engine::{Engine, EngineControl};
 
 use super::{
     create_backup_view::CreateBackupView,
@@ -46,11 +44,10 @@ pub enum View {
 
 pub struct App<'a> {
     state: Arc<Mutex<AppState>>,
-    backup_tx: Option<Sender<BackupRequest>>,
     backup_path: PathBuf,
-    autobackup: Arc<AtomicBool>,
+    engine: Engine,
+    engine_control: EngineControl,
     shutdown: Arc<AtomicBool>,
-    engine_join_handle: JoinHandle<()>,
 
     view: View,
 
@@ -61,21 +58,15 @@ pub struct App<'a> {
 }
 
 impl App<'_> {
-    pub fn new(
-        state: Arc<Mutex<AppState>>,
-        backup_tx: Sender<BackupRequest>,
-        backup_path: PathBuf,
-        autobackup: Arc<AtomicBool>,
-        shutdown: Arc<AtomicBool>,
-        engine_join_handle: JoinHandle<()>,
-    ) -> Self {
+    pub fn new(state: Arc<Mutex<AppState>>, engine: Engine, backup_path: PathBuf, shutdown: Arc<AtomicBool>) -> Self {
+        let engine_control = engine.control();
+
         Self {
             state,
-            backup_tx: Some(backup_tx),
+            engine,
+            engine_control,
             backup_path,
-            autobackup,
             shutdown,
-            engine_join_handle,
 
             view: View::Menu,
 
@@ -112,15 +103,12 @@ impl App<'_> {
                 }
 
                 if self.view == View::Shutdown {
-                    // Signal engine shutdown
-                    self.shutdown.store(true, Ordering::SeqCst);
-                    self.backup_tx = None;
-
-                    self.destroy_views();
+                    // Request engine shutdown
+                    self.engine.shutdown();
 
                     shutting_down = true;
                 }
-            } else if shutting_down && self.engine_join_handle.is_finished() {
+            } else if shutting_down && self.engine.has_shut_down() {
                 break;
             }
 
@@ -133,8 +121,8 @@ impl App<'_> {
             };
         }
 
-        // Wait for engine to shut down gracefully
-        self.engine_join_handle.join().unwrap();
+        // Wait for engine thread to finish
+        self.engine.join();
 
         Ok(())
     }
@@ -196,9 +184,11 @@ impl App<'_> {
         match (key.modifiers, key.code) {
             (_, KeyCode::Char('q')) => self.quit(),
             // F12 to toggle Autobackup
-            (_, KeyCode::F(12)) => self
-                .autobackup
-                .store(!self.autobackup.load(Ordering::SeqCst), Ordering::SeqCst),
+            (_, KeyCode::F(12)) => {
+                let control = self.engine.control();
+
+                control.set_autobackup(!control.get_autobackup())
+            }
             _ => {
                 self.menu_view.on_key_event(key);
 
@@ -220,27 +210,14 @@ impl App<'_> {
     /// Create views if needed
     fn create_views(&mut self) -> Result<(), anyhow::Error> {
         if self.view == View::CreateBackup && self.create_backup_view.is_none() {
-            let Some(backup_tx) = self.backup_tx.as_ref() else {
-                return Ok(());
-            };
-
-            self.create_backup_view = Some(CreateBackupView::new(backup_tx.clone()));
+            self.create_backup_view = Some(CreateBackupView::new(self.engine_control.clone()));
         }
 
         if self.view == View::RestoreBackup && self.restore_backup_view.is_none() {
-            let Some(backup_tx) = self.backup_tx.as_ref() else {
-                return Ok(());
-            };
-
-            self.restore_backup_view = Some(RestoreBackupView::new(backup_tx.clone(), &self.backup_path)?);
+            self.restore_backup_view = Some(RestoreBackupView::new(self.engine_control.clone(), &self.backup_path)?);
         }
 
         Ok(())
-    }
-
-    fn destroy_views(&mut self) {
-        self.create_backup_view = None;
-        self.restore_backup_view = None;
     }
 
     /// Set running to false to quit the application.
@@ -295,7 +272,7 @@ impl Widget for &mut App<'_> {
         let [autobackup_area, _, action_area] =
             Layout::horizontal([Constraint::Length(16), Constraint::Length(1), Constraint::Fill(1)]).areas(footer_area);
 
-        let (autobackup_text, autobackup_style) = if self.autobackup.load(Ordering::SeqCst) {
+        let (autobackup_text, autobackup_style) = if self.engine_control.get_autobackup() {
             ("ON ", FOOTER_AUTOBACKUP_ON_STYLE)
         } else {
             ("OFF", FOOTER_AUTOBACKUP_OFF_STYLE)

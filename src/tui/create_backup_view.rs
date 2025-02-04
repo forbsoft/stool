@@ -1,5 +1,3 @@
-use std::sync::mpsc::Sender;
-
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Layout},
@@ -10,17 +8,16 @@ use ratatui::{
 };
 use tui_textarea::TextArea;
 
-use crate::engine::{self, BackupRequest};
+use crate::engine::{self, BackupRequest, EngineControl};
 
-#[derive(Debug)]
 pub struct CreateBackupView<'a> {
-    backup_tx: Sender<BackupRequest>,
+    engine_control: EngineControl,
     backup_name: TextArea<'a>,
     is_done: bool,
 }
 
 impl CreateBackupView<'_> {
-    pub fn new(backup_tx: Sender<BackupRequest>) -> Self {
+    pub fn new(engine_control: EngineControl) -> Self {
         let title = Line::raw("Create backup");
 
         let block = Block::default()
@@ -35,7 +32,7 @@ impl CreateBackupView<'_> {
         backup_description.set_placeholder_text("Enter backup name");
 
         Self {
-            backup_tx,
+            engine_control,
             backup_name: backup_description,
             is_done: false,
         }
@@ -78,7 +75,7 @@ impl CreateBackupView<'_> {
 
         let archive_name = engine::make_backup_filename(&description);
 
-        self.backup_tx.send(BackupRequest::CreateBackup { archive_name })?;
+        self.engine_control.send(BackupRequest::CreateBackup { archive_name })?;
 
         Ok(())
     }

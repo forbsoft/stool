@@ -1,4 +1,4 @@
-use std::{fs, path::Path, sync::mpsc::Sender};
+use std::{fs, path::Path};
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -8,13 +8,12 @@ use ratatui::{
     widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState, StatefulWidget, Widget},
 };
 
-use crate::engine::BackupRequest;
+use crate::engine::{BackupRequest, EngineControl};
 
 use super::style::{list_item_color, LIST_BORDER_COLOR, LIST_HIGHLIGHT_STYLE};
 
-#[derive(Debug)]
 pub struct RestoreBackupView {
-    backup_tx: Sender<BackupRequest>,
+    engine_control: EngineControl,
 
     items: Vec<String>,
     list_state: ListState,
@@ -22,7 +21,7 @@ pub struct RestoreBackupView {
 }
 
 impl RestoreBackupView {
-    pub fn new(backup_tx: Sender<BackupRequest>, backup_path: &Path) -> Result<Self, anyhow::Error> {
+    pub fn new(engine_control: EngineControl, backup_path: &Path) -> Result<Self, anyhow::Error> {
         let backup_files = fs::read_dir(backup_path)?;
         let mut backup_files: Vec<_> = backup_files
             .filter_map(Result::ok)
@@ -49,7 +48,7 @@ impl RestoreBackupView {
             .collect();
 
         Ok(Self {
-            backup_tx,
+            engine_control,
             items,
             list_state: ListState::default(),
             is_done: false,
@@ -91,7 +90,8 @@ impl RestoreBackupView {
 
         self.is_done = true;
 
-        self.backup_tx.send(BackupRequest::RestoreBackup { archive_name })?;
+        self.engine_control
+            .send(BackupRequest::RestoreBackup { archive_name })?;
 
         Ok(())
     }
