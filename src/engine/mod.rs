@@ -65,6 +65,7 @@ pub struct EngineControl {
     backup_tx: Weak<Sender<BackupRequest>>,
 }
 
+#[derive(Clone)]
 struct InternalGameSavePath {
     pub name: String,
     pub path: PathBuf,
@@ -156,24 +157,26 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
     let autobackup = Arc::new(AtomicBool::new(true));
     let (backup_tx, backup_rx) = std::sync::mpsc::channel::<BackupRequest>();
 
+    let save_paths: Vec<InternalGameSavePath> = gcfg
+        .save_paths
+        .iter()
+        .map(|(name, gsp)| {
+            let name = name.clone();
+            let path = gsp.path.clone();
+            let ignore_globset = gsp.ignore.as_ref().map(|v| filter::build_globset(v).unwrap());
+
+            InternalGameSavePath {
+                name,
+                path,
+                ignore_globset,
+            }
+        })
+        .collect();
+
     // Backup thread
     // Ensures that multiple backups cannot run simultaneously
     let backup_join_handle = {
-        let save_paths: Vec<InternalGameSavePath> = gcfg
-            .save_paths
-            .iter()
-            .map(|(name, gsp)| {
-                let name = name.clone();
-                let path = gsp.path.clone();
-                let ignore_globset = gsp.ignore.as_ref().map(|v| filter::build_globset(v).unwrap());
-
-                InternalGameSavePath {
-                    name,
-                    path,
-                    ignore_globset,
-                }
-            })
-            .collect();
+        let save_paths = save_paths.clone();
 
         let staging_path = staging_path.to_owned();
         let backup_path = backup_path.to_owned();
@@ -432,27 +435,51 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
 
     // Watch save directory for changes
     let (watcher_join_handle, watcher) = {
-        let shutdown = shutdown.clone();
-
         let last_change_at = last_change_at.clone();
+        let save_paths = save_paths.clone();
 
         let (tx, rx) = std::sync::mpsc::channel();
         let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
 
-        for (_, gsp) in gcfg.save_paths.iter() {
+        for gsp in save_paths.iter() {
             watcher.watch(&gsp.path, RecursiveMode::Recursive)?;
         }
 
-        let join_handle = std::thread::spawn(move || {
-            for result in &rx {
-                if shutdown.load(Ordering::SeqCst) {
-                    break;
-                }
+        let save_paths: Vec<_> = save_paths
+            .into_iter()
+            .filter_map(|gsp| {
+                let ignore_globset = gsp.ignore_globset?;
 
+                Some((gsp.path, ignore_globset))
+            })
+            .collect();
+
+        let join_handle = std::thread::spawn(move || {
+            'watch_event: for result in &rx {
                 match result {
                     Ok(event) => {
                         if event.kind.is_access() {
                             continue;
+                        }
+
+                        'ignore: {
+                            if save_paths.is_empty() {
+                                break 'ignore;
+                            }
+
+                            for (save_path, ignore_globset) in save_paths.iter() {
+                                for path in event.paths.iter() {
+                                    let Ok(rel_path) = path.strip_prefix(save_path) else {
+                                        continue;
+                                    };
+
+                                    if !ignore_globset.is_match(rel_path) {
+                                        break 'ignore;
+                                    }
+                                }
+                            }
+
+                            continue 'watch_event;
                         }
 
                         let mut last_change_at = last_change_at.lock().unwrap();
