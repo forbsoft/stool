@@ -1,11 +1,14 @@
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
 use tracing::{error, info};
 
-use crate::engine::EngineArgs;
+use crate::{
+    engine::{self, EngineArgs},
+    tui::{AppState, TuiUiHandler},
+};
 
 pub fn tui(engine_args: EngineArgs) -> Result<(), anyhow::Error> {
     // Shutdown signal
@@ -22,7 +25,12 @@ pub fn tui(engine_args: EngineArgs) -> Result<(), anyhow::Error> {
     })
     .unwrap_or_else(|err| error!("Error setting Ctrl-C handler: {}", err));
 
-    crate::tui::run(engine_args, shutdown)?;
+    let app_state = Arc::new(Mutex::new(AppState::default()));
+    let ui = TuiUiHandler::new(app_state.clone());
+
+    let engine = engine::run(engine_args, shutdown.clone(), ui)?;
+
+    crate::tui::run(engine, app_state, shutdown)?;
 
     Ok(())
 }

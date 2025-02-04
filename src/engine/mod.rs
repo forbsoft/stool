@@ -41,6 +41,7 @@ pub enum EngineState {
     ShutDown = 3,
 }
 
+#[derive(Clone)]
 pub struct EngineArgs {
     pub name: String,
     pub game_config_path: PathBuf,
@@ -49,6 +50,7 @@ pub struct EngineArgs {
 
 /// Represents a running instance of an S-Tool engine.
 pub struct Engine {
+    args: EngineArgs,
     control: EngineControl,
     join_handle: JoinHandle<()>,
 }
@@ -70,6 +72,10 @@ struct InternalGameSavePath {
 }
 
 impl Engine {
+    pub fn args(&self) -> &EngineArgs {
+        &self.args
+    }
+
     pub fn control(&self) -> EngineControl {
         self.control.clone()
     }
@@ -122,7 +128,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
         name,
         game_config_path,
         data_path,
-    } = args;
+    } = &args;
 
     let file_name = format!("{name}.toml");
     let file_path = game_config_path.join(&file_name);
@@ -543,6 +549,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
     };
 
     Ok(Engine {
+        args,
         control,
         join_handle: engine_join_handle,
     })
