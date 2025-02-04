@@ -104,7 +104,7 @@ impl App<'_> {
 
                 if self.view == View::Shutdown {
                     // Request engine shutdown
-                    self.engine.shutdown();
+                    self.engine_control.shutdown();
 
                     shutting_down = true;
                 }

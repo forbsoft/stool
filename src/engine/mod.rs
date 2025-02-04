@@ -4,11 +4,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Stdio,
-    rc::{Rc, Weak},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc::Sender,
-        Arc, Mutex,
+        Arc, Mutex, Weak,
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -16,6 +15,7 @@ use std::{
 
 use anyhow::Context;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use time::{format_description::BorrowedFormatItem, macros::format_description, OffsetDateTime};
 use tracing::{error, info, warn};
 use ui::StoolUiHandler;
@@ -32,6 +32,15 @@ pub enum BackupRequest {
     RestoreBackup { archive_name: String },
 }
 
+#[derive(Clone, Copy, IntoPrimitive, PartialEq, TryFromPrimitive)]
+#[repr(u8)]
+pub enum EngineState {
+    Starting = 0,
+    Running = 1,
+    ShuttingDown = 2,
+    ShutDown = 3,
+}
+
 pub struct EngineArgs {
     pub name: String,
     pub game_config_path: PathBuf,
@@ -40,9 +49,7 @@ pub struct EngineArgs {
 
 /// Represents a running instance of an S-Tool engine.
 pub struct Engine {
-    shutdown: Arc<AtomicBool>,
-    autobackup: Arc<AtomicBool>,
-    backup_tx: Option<Rc<Sender<BackupRequest>>>,
+    control: EngineControl,
     join_handle: JoinHandle<()>,
 }
 
@@ -50,8 +57,10 @@ pub struct Engine {
 /// interactions with a running S-Tool engine.
 #[derive(Clone)]
 pub struct EngineControl {
+    shutdown: Arc<AtomicBool>,
+    state: Arc<AtomicU8>,
     autobackup: Arc<AtomicBool>,
-    backup_tx: Option<Weak<Sender<BackupRequest>>>,
+    backup_tx: Weak<Sender<BackupRequest>>,
 }
 
 struct InternalGameSavePath {
@@ -61,17 +70,8 @@ struct InternalGameSavePath {
 }
 
 impl Engine {
-    /// Request shutdown of engine
-    pub fn shutdown(&mut self) {
-        self.shutdown.store(true, Ordering::SeqCst);
-        self.backup_tx = None;
-    }
-
     pub fn control(&self) -> EngineControl {
-        let autobackup = self.autobackup.clone();
-        let backup_tx = self.backup_tx.as_ref().map(Rc::downgrade);
-
-        EngineControl { autobackup, backup_tx }
+        self.control.clone()
     }
 
     pub fn has_shut_down(&self) -> bool {
@@ -85,6 +85,18 @@ impl Engine {
 }
 
 impl EngineControl {
+    /// Request shutdown of engine
+    pub fn shutdown(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+    }
+
+    pub fn state(&self) -> EngineState {
+        self.state
+            .load(Ordering::SeqCst)
+            .try_into()
+            .expect("Unknown engine state")
+    }
+
     pub fn get_autobackup(&self) -> bool {
         self.autobackup.load(Ordering::SeqCst)
     }
@@ -95,7 +107,7 @@ impl EngineControl {
 
     /// Request a backup operation
     pub fn send(&self, req: BackupRequest) -> Result<(), anyhow::Error> {
-        let Some(Some(backup_tx)) = self.backup_tx.as_ref().map(Weak::upgrade) else {
+        let Some(backup_tx) = self.backup_tx.upgrade() else {
             return Ok(());
         };
 
@@ -126,6 +138,8 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
 
     let staging_path = output_path.join("staging");
     let backup_path = output_path.join("backups");
+
+    let state = Arc::new(AtomicU8::new(EngineState::Starting as u8));
 
     let last_backup_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let last_change_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
@@ -446,18 +460,27 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
         (join_handle, watcher)
     };
 
+    let backup_tx = Arc::new(backup_tx);
+    let weak_backup_tx = Arc::downgrade(&backup_tx);
+
     let engine_join_handle = {
         let shutdown = shutdown.clone();
-        let backup_tx = backup_tx.clone();
+        let state = state.clone();
 
         std::thread::spawn(move || {
             let _pid_lock = pid_lock;
+
+            // Set engine state to Running
+            state.store(EngineState::Running as u8, Ordering::SeqCst);
 
             while !shutdown.load(Ordering::SeqCst) {
                 std::thread::sleep(SLEEP_DURATION);
             }
 
             info!("Shutting down...");
+
+            // Set engine state to ShuttingDown
+            state.store(EngineState::ShuttingDown as u8, Ordering::SeqCst);
 
             'exit_backup: {
                 // If autobackup is paused, do not request an exit backup,
@@ -506,15 +529,21 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                     }
                 }
             }
+
+            // Set engine state to ShutDown
+            state.store(EngineState::ShutDown as u8, Ordering::SeqCst);
         })
     };
 
-    let backup_tx = Some(Rc::new(backup_tx));
+    let control = EngineControl {
+        shutdown,
+        state,
+        autobackup,
+        backup_tx: weak_backup_tx,
+    };
 
     Ok(Engine {
-        shutdown,
-        autobackup,
-        backup_tx,
+        control,
         join_handle: engine_join_handle,
     })
 }
