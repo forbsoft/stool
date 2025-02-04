@@ -151,7 +151,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
     let last_change_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let latest_backup_path: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
 
-    let pause_autobackup = Arc::new(AtomicBool::new(false));
+    let backup_or_restore_ongoing = Arc::new(AtomicBool::new(false));
 
     let autobackup = Arc::new(AtomicBool::new(true));
     let (backup_tx, backup_rx) = std::sync::mpsc::channel::<BackupRequest>();
@@ -180,7 +180,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
 
         let grace_time = Duration::from_secs(gcfg.grace_time);
 
-        let pause_autobackup = pause_autobackup.clone();
+        let backup_or_restore_ongoing = backup_or_restore_ongoing.clone();
         let last_backup_at = last_backup_at.clone();
         let last_change_at = last_change_at.clone();
         let latest_backup_path = latest_backup_path.clone();
@@ -190,7 +190,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
         std::thread::spawn(move || {
             for backup_request in &backup_rx {
                 // Pause autobackup while executing a request
-                pause_autobackup.store(true, Ordering::SeqCst);
+                backup_or_restore_ongoing.store(true, Ordering::SeqCst);
 
                 let res: Result<(), anyhow::Error> = (|| {
                     match backup_request {
@@ -352,7 +352,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                 }
 
                 // Resume autobackup after request is completed
-                pause_autobackup.store(false, Ordering::SeqCst);
+                backup_or_restore_ongoing.store(false, Ordering::SeqCst);
             }
 
             ui.clear().unwrap();
@@ -366,7 +366,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
 
         let backup_interval = Duration::from_secs(gcfg.backup_interval);
 
-        let pause_autobackup = pause_autobackup.clone();
+        let backup_or_restore_ongoing = backup_or_restore_ongoing.clone();
         let last_backup_at = last_backup_at.clone();
         let last_change_at = last_change_at.clone();
 
@@ -381,7 +381,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
 
             std::thread::sleep(Duration::from_secs(1));
 
-            if !autobackup.load(Ordering::SeqCst) || pause_autobackup.load(Ordering::SeqCst) {
+            if !autobackup.load(Ordering::SeqCst) || backup_or_restore_ongoing.load(Ordering::SeqCst) {
                 continue;
             }
 
@@ -489,9 +489,8 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
             state.store(EngineState::ShuttingDown as u8, Ordering::SeqCst);
 
             'exit_backup: {
-                // If autobackup is paused, do not request an exit backup,
-                // as that means a backup or restore is in progress.
-                if pause_autobackup.load(Ordering::SeqCst) {
+                // If a backup or restore is ongoing, do not request an exit backup.
+                if backup_or_restore_ongoing.load(Ordering::SeqCst) {
                     break 'exit_backup;
                 }
 
@@ -507,6 +506,8 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                         break 'exit_backup;
                     }
                 }
+
+                info!("Creating exit backup...");
 
                 let archive_name = make_backup_filename("Exit");
 
