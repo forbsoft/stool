@@ -1,0 +1,18 @@
+[general]
+ignore = "**/.git"
+
+[authoritative-version-source]
+type = "cargo"
+
+[file-updaters.'version.json']
+type = "regex"
+replacers = [
+  { regexes = '("FullVersion": ")(.*)(")' },
+]
+
+[[update-version-sources]]
+globs = "**"
+
+[[update-files]]
+globs = "version.json"
+updater = "version.json"
