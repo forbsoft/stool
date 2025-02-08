@@ -675,6 +675,11 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                 }
             }
 
+            // Try to delete staging directory
+            if staging_path.exists() {
+                fs::remove_dir_all(&staging_path).ok();
+            }
+
             // Set engine state to ShutDown
             state.store(EngineState::ShutDown as u8, Ordering::SeqCst);
         })
