@@ -272,7 +272,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                                         GameSavePathType::Directory => {
                                             let ignore_globset = gsp.ignore_globset.as_ref().unwrap_or(&empty_globset);
 
-                                            sync::sync_dir(path, &staging_gsp_path, ignore_globset, &mut ui)?;
+                                            sync::sync_dir(path, &staging_gsp_path, ignore_globset, false, &mut ui)?;
                                         }
                                         GameSavePathType::File => {
                                             fs::create_dir_all(&staging_gsp_path)?;
@@ -343,7 +343,9 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                                     // Update staging directory
                                     match gsp.type_ {
                                         GameSavePathType::Directory => {
-                                            sync::sync_dir(&src_path, path, &empty_globset, &mut ui)?;
+                                            let ignore_globset = gsp.ignore_globset.as_ref().unwrap_or(&empty_globset);
+
+                                            sync::sync_dir(&src_path, path, ignore_globset, true, &mut ui)?;
                                         }
                                         GameSavePathType::File => {
                                             let Some(filename) = path.file_name() else {

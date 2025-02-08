@@ -285,6 +285,7 @@ pub fn sync_dir(
     src: &Path,
     dst: &Path,
     ignore_globset: &globset::GlobSet,
+    ignore_in_dst: bool,
     ui: &mut dyn SyncUiHandler,
 ) -> Result<(), anyhow::Error> {
     // Create destination directory if it does not exist
@@ -292,11 +293,17 @@ pub fn sync_dir(
         fs::create_dir_all(dst)?;
     }
 
+    let dst_ignore_globset = if ignore_in_dst {
+        ignore_globset
+    } else {
+        &globset::GlobSet::empty()
+    };
+
     let mut attempt = 0;
 
     loop {
         let src = SyncDir::new(src, ignore_globset, ui)?;
-        let dst = SyncDir::new(dst, &globset::GlobSet::empty(), ui)?;
+        let dst = SyncDir::new(dst, dst_ignore_globset, ui)?;
         let job = dst.sync_from(&src, ui)?;
 
         let res = job.execute(ui);
