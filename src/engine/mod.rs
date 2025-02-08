@@ -73,6 +73,7 @@ struct InternalGameSavePath {
     pub name: String,
     pub type_: GameSavePathType,
     pub path: PathBuf,
+    pub include_globset: Option<globset::GlobSet>,
     pub ignore_globset: Option<globset::GlobSet>,
 }
 
@@ -168,12 +169,14 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
             let name = name.clone();
             let type_ = gsp.type_.clone();
             let path = gsp.path.clone();
+            let include_globset = gsp.include.as_ref().map(|v| filter::build_globset(v).unwrap());
             let ignore_globset = gsp.ignore.as_ref().map(|v| filter::build_globset(v).unwrap());
 
             InternalGameSavePath {
                 name,
                 type_,
                 path,
+                include_globset,
                 ignore_globset,
             }
         })
@@ -193,8 +196,6 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
         let last_backup_at = last_backup_at.clone();
         let last_change_at = last_change_at.clone();
         let latest_backup_path = latest_backup_path.clone();
-
-        let empty_globset = globset::GlobSet::empty();
 
         std::thread::spawn(move || {
             for backup_request in &backup_rx {
@@ -270,9 +271,14 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                                     // Update staging directory
                                     match gsp.type_ {
                                         GameSavePathType::Directory => {
-                                            let ignore_globset = gsp.ignore_globset.as_ref().unwrap_or(&empty_globset);
-
-                                            sync::sync_dir(path, &staging_gsp_path, ignore_globset, false, &mut ui)?;
+                                            sync::sync_dir(
+                                                path,
+                                                &staging_gsp_path,
+                                                gsp.include_globset.as_ref(),
+                                                gsp.ignore_globset.as_ref(),
+                                                false,
+                                                &mut ui,
+                                            )?;
                                         }
                                         GameSavePathType::File => {
                                             fs::create_dir_all(&staging_gsp_path)?;
@@ -343,9 +349,14 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                                     // Update staging directory
                                     match gsp.type_ {
                                         GameSavePathType::Directory => {
-                                            let ignore_globset = gsp.ignore_globset.as_ref().unwrap_or(&empty_globset);
-
-                                            sync::sync_dir(&src_path, path, ignore_globset, true, &mut ui)?;
+                                            sync::sync_dir(
+                                                &src_path,
+                                                path,
+                                                gsp.include_globset.as_ref(),
+                                                gsp.ignore_globset.as_ref(),
+                                                true,
+                                                &mut ui,
+                                            )?;
                                         }
                                         GameSavePathType::File => {
                                             let Some(filename) = path.file_name() else {
@@ -482,9 +493,11 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
         let save_paths: Vec<_> = save_paths
             .into_iter()
             .filter_map(|gsp| {
-                let ignore_globset = gsp.ignore_globset?;
+                if gsp.include_globset.is_none() && gsp.ignore_globset.is_none() {
+                    return None;
+                }
 
-                Some((gsp.path, ignore_globset))
+                Some((gsp.path, gsp.include_globset, gsp.ignore_globset))
             })
             .collect();
 
@@ -501,15 +514,25 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                                 break 'ignore;
                             }
 
-                            for (save_path, ignore_globset) in save_paths.iter() {
+                            for (save_path, include_globset, ignore_globset) in save_paths.iter() {
                                 for path in event.paths.iter() {
                                     let Ok(rel_path) = path.strip_prefix(save_path) else {
                                         continue;
                                     };
 
-                                    if !ignore_globset.is_match(rel_path) {
-                                        break 'ignore;
+                                    if let Some(include_globset) = include_globset {
+                                        if !include_globset.is_match(rel_path) {
+                                            continue;
+                                        }
                                     }
+
+                                    if let Some(ignore_globset) = ignore_globset {
+                                        if ignore_globset.is_match(rel_path) {
+                                            continue;
+                                        }
+                                    }
+
+                                    break 'ignore;
                                 }
                             }
 

@@ -67,7 +67,8 @@ pub trait SyncUiHandler {
 impl SyncDir {
     pub fn new(
         path: &Path,
-        ignore_globset: &globset::GlobSet,
+        include_globset: Option<&globset::GlobSet>,
+        ignore_globset: Option<&globset::GlobSet>,
         ui: &mut dyn SyncUiHandler,
     ) -> Result<Self, anyhow::Error> {
         let path = path.canonicalize()?;
@@ -82,13 +83,21 @@ impl SyncDir {
             let is_file = entry.file_type().is_file();
             let rel_path = entry.into_path().strip_prefix(&path)?.to_path_buf();
 
-            if ignore_globset.is_match(&rel_path) {
-                continue;
-            }
-
             if !is_file {
                 dirs.insert(rel_path);
                 continue;
+            }
+
+            if let Some(include_globset) = include_globset {
+                if !include_globset.is_match(&rel_path) {
+                    continue;
+                }
+            }
+
+            if let Some(ignore_globset) = ignore_globset {
+                if ignore_globset.is_match(&rel_path) {
+                    continue;
+                }
             }
 
             files.insert(rel_path);
@@ -255,7 +264,12 @@ impl SyncJob {
                     fs::remove_file(dst_path.join(path)).map_err(|e| SyncJobError::Anyhow(e.into()))?;
                 }
                 SyncOp::RemoveDir { path } => {
-                    fs::remove_dir(dst_path.join(path)).map_err(|e| SyncJobError::Anyhow(e.into()))?;
+                    let res = fs::remove_dir(dst_path.join(path));
+                    match res {
+                        Ok(_) => {}
+                        Err(err) if err.kind() == ErrorKind::DirectoryNotEmpty => {}
+                        Err(err) => Err(SyncJobError::Anyhow(err.into()))?,
+                    }
                 }
                 SyncOp::VerifyCheckSum { path, size, crc32 } => {
                     let dst_file_path = dst_path.join(&path);
@@ -284,8 +298,9 @@ impl SyncJob {
 pub fn sync_dir(
     src: &Path,
     dst: &Path,
-    ignore_globset: &globset::GlobSet,
-    ignore_in_dst: bool,
+    include_globset: Option<&globset::GlobSet>,
+    ignore_globset: Option<&globset::GlobSet>,
+    filter_in_dst: bool,
     ui: &mut dyn SyncUiHandler,
 ) -> Result<(), anyhow::Error> {
     // Create destination directory if it does not exist
@@ -293,17 +308,17 @@ pub fn sync_dir(
         fs::create_dir_all(dst)?;
     }
 
-    let dst_ignore_globset = if ignore_in_dst {
-        ignore_globset
+    let (dst_include_globset, dst_ignore_globset) = if filter_in_dst {
+        (include_globset, ignore_globset)
     } else {
-        &globset::GlobSet::empty()
+        (None, None)
     };
 
     let mut attempt = 0;
 
     loop {
-        let src = SyncDir::new(src, ignore_globset, ui)?;
-        let dst = SyncDir::new(dst, dst_ignore_globset, ui)?;
+        let src = SyncDir::new(src, include_globset, ignore_globset, ui)?;
+        let dst = SyncDir::new(dst, dst_include_globset, dst_ignore_globset, ui)?;
         let job = dst.sync_from(&src, ui)?;
 
         let res = job.execute(ui);

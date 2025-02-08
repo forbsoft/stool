@@ -48,6 +48,7 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
             GameSavePath {
                 type_,
                 path,
+                include: Default::default(),
                 ignore: Default::default(),
             },
         );

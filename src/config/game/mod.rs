@@ -21,6 +21,7 @@ pub struct GameSavePath {
     #[serde(default = "default_gamesavepath_type")]
     pub type_: GameSavePathType,
     pub path: PathBuf,
+    pub include: Option<Vec<String>>,
     pub ignore: Option<Vec<String>>,
 }
 
