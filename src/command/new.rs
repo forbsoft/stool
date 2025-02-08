@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::config::game::{GameConfig, GameSavePath};
+use crate::config::game::{GameConfig, GameSavePath, GameSavePathType};
 
 pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
     let name: String = dialoguer::Input::new().with_prompt("Name").interact_text()?;
@@ -37,9 +37,16 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
             .interact_text()?
             .into();
 
+        let type_ = if path.is_file() {
+            GameSavePathType::File
+        } else {
+            GameSavePathType::Directory
+        };
+
         save_paths.insert(
             name,
             GameSavePath {
+                type_,
                 path,
                 ignore: Default::default(),
             },

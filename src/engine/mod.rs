@@ -20,7 +20,10 @@ use time::{format_description::BorrowedFormatItem, macros::format_description, O
 use tracing::{error, info, warn};
 use ui::StoolUiHandler;
 
-use crate::internal::{filter, pid::PidLock, sync};
+use crate::{
+    config::game::GameSavePathType,
+    internal::{filter, pid::PidLock, sync},
+};
 
 pub const ARCHIVE_DATE_FORMAT: &[BorrowedFormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour]-[minute]-[second]");
@@ -68,6 +71,7 @@ pub struct EngineControl {
 #[derive(Clone)]
 struct InternalGameSavePath {
     pub name: String,
+    pub type_: GameSavePathType,
     pub path: PathBuf,
     pub ignore_globset: Option<globset::GlobSet>,
 }
@@ -162,11 +166,13 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
         .iter()
         .map(|(name, gsp)| {
             let name = name.clone();
+            let type_ = gsp.type_.clone();
             let path = gsp.path.clone();
             let ignore_globset = gsp.ignore.as_ref().map(|v| filter::build_globset(v).unwrap());
 
             InternalGameSavePath {
                 name,
+                type_,
                 path,
                 ignore_globset,
             }
@@ -261,10 +267,18 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                                         break 'stage;
                                     }
 
-                                    let ignore_globset = gsp.ignore_globset.as_ref().unwrap_or(&empty_globset);
-
                                     // Update staging directory
-                                    sync::sync(path, &staging_gsp_path, ignore_globset, &mut ui)?;
+                                    match gsp.type_ {
+                                        GameSavePathType::Directory => {
+                                            let ignore_globset = gsp.ignore_globset.as_ref().unwrap_or(&empty_globset);
+
+                                            sync::sync_dir(path, &staging_gsp_path, ignore_globset, &mut ui)?;
+                                        }
+                                        GameSavePathType::File => {
+                                            fs::create_dir_all(&staging_gsp_path)?;
+                                            sync::sync_file(path, &staging_gsp_path, &mut ui)?;
+                                        }
+                                    }
                                 }
 
                                 ui.end_stage();
@@ -327,7 +341,25 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                                     }
 
                                     // Update staging directory
-                                    sync::sync(&src_path, path, &empty_globset, &mut ui)?;
+                                    match gsp.type_ {
+                                        GameSavePathType::Directory => {
+                                            sync::sync_dir(&src_path, path, &empty_globset, &mut ui)?;
+                                        }
+                                        GameSavePathType::File => {
+                                            let Some(filename) = path.file_name() else {
+                                                break 'restore;
+                                            };
+
+                                            let Some(dst_dir_path) = path.parent() else {
+                                                break 'restore;
+                                            };
+
+                                            let src_file_path = src_path.join(filename);
+
+                                            fs::create_dir_all(dst_dir_path)?;
+                                            sync::sync_file(&src_file_path, dst_dir_path, &mut ui)?;
+                                        }
+                                    }
                                 }
 
                                 ui.end_restore_sp();

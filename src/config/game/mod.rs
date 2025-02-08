@@ -7,9 +7,19 @@ use std::str::FromStr;
 use anyhow::Context;
 use serde_derive::{Deserialize, Serialize};
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GameSavePathType {
+    Directory,
+    File,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct GameSavePath {
+    #[serde(rename = "type")]
+    #[serde(default = "default_gamesavepath_type")]
+    pub type_: GameSavePathType,
     pub path: PathBuf,
     pub ignore: Option<Vec<String>>,
 }
@@ -56,4 +66,8 @@ impl FromStr for GameConfig {
 
         Ok(config)
     }
+}
+
+fn default_gamesavepath_type() -> GameSavePathType {
+    GameSavePathType::Directory
 }

@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow::Context;
 use filetime::FileTime;
 use tracing::error;
 
@@ -117,7 +118,6 @@ impl SyncDir {
 
         // Copy files not in destination
         let files_not_in_dst = src.files.difference(&self.files);
-        //ops.extend(files_not_in_dst.map(|p| SyncOp::Copy { path: p.clone() }));
         for p in files_not_in_dst {
             let src_file_path = src_path.join(p);
 
@@ -281,7 +281,7 @@ impl SyncJob {
     }
 }
 
-pub fn sync(
+pub fn sync_dir(
     src: &Path,
     dst: &Path,
     ignore_globset: &globset::GlobSet,
@@ -298,6 +298,93 @@ pub fn sync(
         let src = SyncDir::new(src, ignore_globset, ui)?;
         let dst = SyncDir::new(dst, &globset::GlobSet::empty(), ui)?;
         let job = dst.sync_from(&src, ui)?;
+
+        let res = job.execute(ui);
+        match res {
+            Ok(_) => {}
+            Err(err) => {
+                attempt += 1;
+
+                if attempt > 3 {
+                    return Err(err.into());
+                }
+
+                match err {
+                    SyncJobError::ChecksumMismatch => error!("Checksum mismatch, re-running sync job..."),
+                    SyncJobError::FileNotFound { path } => error!("File not found in source: {}", path.display()),
+                    SyncJobError::ReadError { path } => error!("Error reading source file: {}", path.display()),
+                    _ => Err(err)?,
+                }
+
+                continue;
+            }
+        };
+
+        break;
+    }
+
+    Ok(())
+}
+
+pub fn sync_file(src_file_path: &Path, dst: &Path, ui: &mut dyn SyncUiHandler) -> Result<(), anyhow::Error> {
+    let src_dir_path = src_file_path
+        .parent()
+        .context("Error getting parent directory of source file")?;
+    let rel_file_path = src_file_path.strip_prefix(src_dir_path)?;
+    let dst_file_path = dst.join(rel_file_path);
+
+    // Create destination directory if it does not exist
+    if !dst.exists() {
+        fs::create_dir_all(dst)?;
+    }
+
+    let mut attempt = 0;
+
+    loop {
+        let src_metadata = src_file_path.metadata()?;
+        let src_size = src_metadata.len();
+
+        ui.begin_file("Checksum", &rel_file_path.to_string_lossy(), src_size);
+
+        let src_hash = hash_crc32(src_file_path, |bytes| ui.file_progress(bytes as u64))?;
+
+        ui.end_file();
+
+        if dst_file_path.exists() {
+            'diff: {
+                let dst_metadata = dst_file_path.metadata()?;
+                let dst_size = dst_metadata.len();
+
+                if src_size != dst_size {
+                    break 'diff;
+                }
+
+                let src_modified = FileTime::from_last_modification_time(&src_metadata);
+                let dst_modified = FileTime::from_last_modification_time(&dst_metadata);
+
+                if src_modified != dst_modified {
+                    break 'diff;
+                }
+
+                // No differences found
+                return Ok(());
+            }
+        }
+
+        let job = SyncJob {
+            ops: vec![
+                SyncOp::Copy {
+                    path: rel_file_path.to_path_buf(),
+                },
+                SyncOp::VerifyCheckSum {
+                    path: rel_file_path.to_path_buf(),
+                    size: src_size,
+                    crc32: src_hash,
+                },
+            ],
+            src_path: src_dir_path.to_path_buf(),
+            dst_path: dst.to_path_buf(),
+        };
 
         let res = job.execute(ui);
         match res {
