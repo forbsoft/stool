@@ -147,6 +147,10 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
     let staging_path = output_path.join("staging");
     let backup_path = output_path.join("backups");
 
+    if staging_path.exists() {
+        fs::remove_dir_all(&staging_path)?;
+    }
+
     let state = Arc::new(AtomicU8::new(EngineState::Starting as u8));
 
     let last_backup_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
