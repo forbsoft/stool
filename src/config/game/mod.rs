@@ -24,15 +24,24 @@ pub struct GameSaveFile {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
+pub struct AutoBackup {
+    pub enabled: bool,
+    pub min_interval: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct GameConfig {
+    pub grace_time: u64,
+    pub copy_latest_to_path: Option<PathBuf>,
+
+    pub auto_backup: AutoBackup,
+
     #[serde(default)]
     pub save_dirs: BTreeMap<String, GameSaveDir>,
     #[serde(default)]
     #[serde(rename = "save-file")]
     pub save_files: Vec<GameSaveFile>,
-    pub backup_interval: u64,
-    pub grace_time: u64,
-    pub copy_latest_to_path: Option<PathBuf>,
 }
 
 impl GameConfig {

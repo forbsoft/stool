@@ -155,7 +155,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
 
     let backup_or_restore_ongoing = Arc::new(AtomicBool::new(false));
 
-    let autobackup = Arc::new(AtomicBool::new(true));
+    let autobackup = Arc::new(AtomicBool::new(gcfg.auto_backup.enabled));
     let (backup_tx, backup_rx) = std::sync::mpsc::channel::<BackupRequest>();
 
     let save_dirs: Vec<InternalGameSaveDir> = gcfg
@@ -450,7 +450,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
         let shutdown = shutdown.clone();
         let autobackup = autobackup.clone();
 
-        let backup_interval = Duration::from_secs(gcfg.backup_interval);
+        let min_interval = Duration::from_secs(gcfg.auto_backup.min_interval);
 
         let backup_or_restore_ongoing = backup_or_restore_ongoing.clone();
         let last_backup_at = last_backup_at.clone();
@@ -501,7 +501,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                 }
 
                 if let Some(last_backup_at) = *last_backup_at {
-                    if now < (last_backup_at + backup_interval) {
+                    if now < (last_backup_at + min_interval) {
                         continue;
                     }
                 }

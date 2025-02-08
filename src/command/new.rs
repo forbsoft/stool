@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::config::game::{GameConfig, GameSaveDir, GameSaveFile};
+use crate::config::game::{AutoBackup, GameConfig, GameSaveDir, GameSaveFile};
 
 pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
     let name: String = dialoguer::Input::new().with_prompt("Name").interact_text()?;
@@ -54,7 +54,7 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
         }
     }
 
-    let backup_interval: u64 = dialoguer::Input::new()
+    let min_interval: u64 = dialoguer::Input::new()
         .with_prompt("Backup interval (seconds)")
         .default(600)
         .interact_text()?;
@@ -75,12 +75,19 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
         None
     };
 
+    let auto_backup = AutoBackup {
+        enabled: true,
+        min_interval,
+    };
+
     let game_config = GameConfig {
-        save_dirs,
-        save_files,
-        backup_interval,
         grace_time,
         copy_latest_to_path,
+
+        auto_backup,
+
+        save_dirs,
+        save_files,
     };
 
     fs::create_dir_all(game_config_path)?;
