@@ -9,7 +9,7 @@ use serde_derive::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub struct GameSavePath {
+pub struct GameSaveDir {
     pub path: PathBuf,
     pub include: Option<Vec<String>>,
     pub ignore: Option<Vec<String>>,
@@ -26,7 +26,7 @@ pub struct GameSaveFile {
 #[serde(rename_all = "kebab-case")]
 pub struct GameConfig {
     #[serde(default)]
-    pub save_paths: BTreeMap<String, GameSavePath>,
+    pub save_dirs: BTreeMap<String, GameSaveDir>,
     #[serde(default)]
     #[serde(rename = "save-file")]
     pub save_files: Vec<GameSaveFile>,

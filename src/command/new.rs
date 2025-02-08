@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::config::game::{GameConfig, GameSaveFile, GameSavePath};
+use crate::config::game::{GameConfig, GameSaveDir, GameSaveFile};
 
 pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
     let name: String = dialoguer::Input::new().with_prompt("Name").interact_text()?;
@@ -15,7 +15,7 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
         return Err(anyhow::anyhow!("Game config '{name}' already exists"));
     }
 
-    let mut save_paths: BTreeMap<String, GameSavePath> = BTreeMap::new();
+    let mut save_dirs: BTreeMap<String, GameSaveDir> = BTreeMap::new();
     let mut save_files: Vec<GameSaveFile> = Vec::new();
 
     loop {
@@ -25,8 +25,8 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
             .interact_text()?;
 
         if path.is_empty() {
-            if save_paths.is_empty() && save_files.is_empty() {
-                eprintln!("At least one save path or file is required.");
+            if save_dirs.is_empty() && save_files.is_empty() {
+                eprintln!("At least one save directory or file is required.");
                 continue;
             }
 
@@ -43,9 +43,9 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
         } else {
             let name: String = dialoguer::Input::new().with_prompt("Name").interact_text()?;
 
-            save_paths.insert(
+            save_dirs.insert(
                 name,
-                GameSavePath {
+                GameSaveDir {
                     path,
                     include: Default::default(),
                     ignore: Default::default(),
@@ -76,7 +76,7 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
     };
 
     let game_config = GameConfig {
-        save_paths,
+        save_dirs,
         save_files,
         backup_interval,
         grace_time,

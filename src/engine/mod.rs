@@ -66,7 +66,7 @@ pub struct EngineControl {
 }
 
 #[derive(Clone)]
-struct InternalGameSavePath {
+struct InternalGameSaveDir {
     pub name: String,
     pub path: PathBuf,
     pub include_globset: Option<globset::GlobSet>,
@@ -158,8 +158,8 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
     let autobackup = Arc::new(AtomicBool::new(true));
     let (backup_tx, backup_rx) = std::sync::mpsc::channel::<BackupRequest>();
 
-    let save_paths: Vec<InternalGameSavePath> = gcfg
-        .save_paths
+    let save_dirs: Vec<InternalGameSaveDir> = gcfg
+        .save_dirs
         .iter()
         .map(|(name, gsp)| {
             let name = name.clone();
@@ -167,7 +167,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
             let include_globset = gsp.include.as_ref().map(|v| filter::build_globset(v).unwrap());
             let ignore_globset = gsp.ignore.as_ref().map(|v| filter::build_globset(v).unwrap());
 
-            InternalGameSavePath {
+            InternalGameSaveDir {
                 name,
                 path,
                 include_globset,
@@ -179,7 +179,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
     // Backup thread
     // Ensures that multiple backups cannot run simultaneously
     let backup_join_handle = {
-        let save_paths = save_paths.clone();
+        let save_dirs = save_dirs.clone();
         let save_files = gcfg.save_files.clone();
 
         let staging_path = staging_path.to_owned();
@@ -244,9 +244,9 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
 
                             let archive_path = backup_path.join(&archive_name);
 
-                            ui.begin_staging(save_paths.len() + save_files.len());
+                            ui.begin_staging(save_dirs.len() + save_files.len());
 
-                            for gsp in save_paths.iter() {
+                            for gsp in save_dirs.iter() {
                                 let name = &gsp.name;
                                 let path = &gsp.path;
 
@@ -353,7 +353,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
 
                             // Restore save paths from staging directory
 
-                            for gsp in save_paths.iter() {
+                            for gsp in save_dirs.iter() {
                                 let name = &gsp.name;
                                 let path = &gsp.path;
 
@@ -525,7 +525,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
         let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
 
         // Watch save directories
-        for gsp in save_paths.iter() {
+        for gsp in save_dirs.iter() {
             watcher.watch(&gsp.path, RecursiveMode::Recursive)?;
         }
 
@@ -534,7 +534,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
             watcher.watch(gsf_path, RecursiveMode::NonRecursive)?;
         }
 
-        let save_paths: Vec<_> = save_paths
+        let save_dirs: Vec<_> = save_dirs
             .into_iter()
             .filter_map(|gsp| {
                 if gsp.include_globset.is_none() && gsp.ignore_globset.is_none() {
@@ -560,13 +560,13 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                                 }
                             }
 
-                            if save_paths.is_empty() {
+                            if save_dirs.is_empty() {
                                 break 'ignore;
                             }
 
-                            for (save_path, include_globset, ignore_globset) in save_paths.iter() {
+                            for (save_dir_path, include_globset, ignore_globset) in save_dirs.iter() {
                                 for path in event.paths.iter() {
-                                    let Ok(rel_path) = path.strip_prefix(save_path) else {
+                                    let Ok(rel_path) = path.strip_prefix(save_dir_path) else {
                                         continue;
                                     };
 
