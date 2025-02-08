@@ -20,10 +20,7 @@ use time::{format_description::BorrowedFormatItem, macros::format_description, O
 use tracing::{error, info, warn};
 use ui::StoolUiHandler;
 
-use crate::{
-    config::game::GameSavePathType,
-    internal::{filter, pid::PidLock, sync},
-};
+use crate::internal::{filter, pid::PidLock, sync};
 
 pub const ARCHIVE_DATE_FORMAT: &[BorrowedFormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour]-[minute]-[second]");
@@ -71,7 +68,6 @@ pub struct EngineControl {
 #[derive(Clone)]
 struct InternalGameSavePath {
     pub name: String,
-    pub type_: GameSavePathType,
     pub path: PathBuf,
     pub include_globset: Option<globset::GlobSet>,
     pub ignore_globset: Option<globset::GlobSet>,
@@ -167,14 +163,12 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
         .iter()
         .map(|(name, gsp)| {
             let name = name.clone();
-            let type_ = gsp.type_.clone();
             let path = gsp.path.clone();
             let include_globset = gsp.include.as_ref().map(|v| filter::build_globset(v).unwrap());
             let ignore_globset = gsp.ignore.as_ref().map(|v| filter::build_globset(v).unwrap());
 
             InternalGameSavePath {
                 name,
-                type_,
                 path,
                 include_globset,
                 ignore_globset,
@@ -186,6 +180,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
     // Ensures that multiple backups cannot run simultaneously
     let backup_join_handle = {
         let save_paths = save_paths.clone();
+        let save_files = gcfg.save_files.clone();
 
         let staging_path = staging_path.to_owned();
         let backup_path = backup_path.to_owned();
@@ -249,7 +244,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
 
                             let archive_path = backup_path.join(&archive_name);
 
-                            ui.begin_staging(save_paths.len());
+                            ui.begin_staging(save_paths.len() + save_files.len());
 
                             for gsp in save_paths.iter() {
                                 let name = &gsp.name;
@@ -262,29 +257,55 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
 
                                     // If source path is missing, remove the existing staging directory for this save path
                                     if !path.exists() {
-                                        warn!("Path does not exist [{name}]: {}", path.display());
+                                        warn!("Save dir does not exist [{name}]: {}", path.display());
 
                                         fs::remove_dir_all(&staging_gsp_path)?;
                                         break 'stage;
                                     }
 
-                                    // Update staging directory
-                                    match gsp.type_ {
-                                        GameSavePathType::Directory => {
-                                            sync::sync_dir(
-                                                path,
-                                                &staging_gsp_path,
-                                                gsp.include_globset.as_ref(),
-                                                gsp.ignore_globset.as_ref(),
-                                                false,
-                                                &mut ui,
-                                            )?;
-                                        }
-                                        GameSavePathType::File => {
-                                            fs::create_dir_all(&staging_gsp_path)?;
-                                            sync::sync_file(path, &staging_gsp_path, &mut ui)?;
-                                        }
+                                    // Sync to staging directory
+                                    sync::sync_dir(
+                                        path,
+                                        &staging_gsp_path,
+                                        gsp.include_globset.as_ref(),
+                                        gsp.ignore_globset.as_ref(),
+                                        false,
+                                        &mut ui,
+                                    )?;
+                                }
+
+                                ui.end_stage();
+                            }
+
+                            for gsf in save_files.iter() {
+                                let path = &gsf.path;
+                                let dir_path = path
+                                    .parent()
+                                    .context("Couldn't get parent directory of game save file")?;
+                                let rel_path = path.strip_prefix(dir_path)?;
+
+                                ui.begin_stage(&rel_path.to_string_lossy());
+
+                                'stage: {
+                                    let staging_dir_path = if let Some(staging_subdir) = &gsf.staging_subdirectory {
+                                        &staging_path.join(staging_subdir)
+                                    } else {
+                                        &staging_path
+                                    };
+
+                                    let staging_file_path = staging_dir_path.join(rel_path);
+
+                                    // If source path is missing, remove the existing staging directory for this save path
+                                    if !path.exists() {
+                                        warn!("Save file does not exist [{}]: {}", rel_path.display(), path.display());
+
+                                        fs::remove_file(&staging_file_path)?;
+                                        break 'stage;
                                     }
+
+                                    // Sync to staging directory
+                                    fs::create_dir_all(staging_dir_path)?;
+                                    sync::sync_file(path, staging_dir_path, &mut ui)?;
                                 }
 
                                 ui.end_stage();
@@ -342,37 +363,54 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                                     let src_path = staging_path.join(name);
 
                                     if !src_path.exists() {
-                                        warn!("Path does not exist [{name}]: {}", src_path.display());
+                                        warn!("Directory does not exist in backup [{name}]: {}", src_path.display());
                                         break 'restore;
                                     }
 
-                                    // Update staging directory
-                                    match gsp.type_ {
-                                        GameSavePathType::Directory => {
-                                            sync::sync_dir(
-                                                &src_path,
-                                                path,
-                                                gsp.include_globset.as_ref(),
-                                                gsp.ignore_globset.as_ref(),
-                                                true,
-                                                &mut ui,
-                                            )?;
-                                        }
-                                        GameSavePathType::File => {
-                                            let Some(filename) = path.file_name() else {
-                                                break 'restore;
-                                            };
+                                    // Sync to save directory
+                                    sync::sync_dir(
+                                        &src_path,
+                                        path,
+                                        gsp.include_globset.as_ref(),
+                                        gsp.ignore_globset.as_ref(),
+                                        true,
+                                        &mut ui,
+                                    )?;
+                                }
 
-                                            let Some(dst_dir_path) = path.parent() else {
-                                                break 'restore;
-                                            };
+                                ui.end_restore_sp();
+                            }
 
-                                            let src_file_path = src_path.join(filename);
+                            for gsf in save_files.iter() {
+                                let path = &gsf.path;
+                                let dir_path = path
+                                    .parent()
+                                    .context("Couldn't get parent directory of game save file")?;
+                                let rel_path = path.strip_prefix(dir_path)?;
 
-                                            fs::create_dir_all(dst_dir_path)?;
-                                            sync::sync_file(&src_file_path, dst_dir_path, &mut ui)?;
-                                        }
+                                ui.begin_restore_sp(&rel_path.to_string_lossy());
+
+                                'restore: {
+                                    let staging_dir_path = if let Some(staging_subdir) = &gsf.staging_subdirectory {
+                                        &staging_path.join(staging_subdir)
+                                    } else {
+                                        &staging_path
+                                    };
+
+                                    let staging_file_path = staging_dir_path.join(rel_path);
+
+                                    if !staging_file_path.exists() {
+                                        warn!(
+                                            "File does not exist in backup [{}]: {}",
+                                            rel_path.display(),
+                                            staging_file_path.display()
+                                        );
+                                        break 'restore;
                                     }
+
+                                    // Sync to save directory
+                                    fs::create_dir_all(dir_path)?;
+                                    sync::sync_file(&staging_file_path, dir_path, &mut ui)?;
                                 }
 
                                 ui.end_restore_sp();
@@ -481,13 +519,19 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
     // Watch save directory for changes
     let (watcher_join_handle, watcher) = {
         let last_change_at = last_change_at.clone();
-        let save_paths = save_paths.clone();
+        let save_files: Vec<_> = gcfg.save_files.iter().map(|gsf| gsf.path.clone()).collect();
 
         let (tx, rx) = std::sync::mpsc::channel();
         let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
 
+        // Watch save directories
         for gsp in save_paths.iter() {
             watcher.watch(&gsp.path, RecursiveMode::Recursive)?;
+        }
+
+        // Watch save files
+        for gsf_path in save_files.iter() {
+            watcher.watch(gsf_path, RecursiveMode::NonRecursive)?;
         }
 
         let save_paths: Vec<_> = save_paths
@@ -510,6 +554,12 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                         }
 
                         'ignore: {
+                            for path in event.paths.iter() {
+                                if save_files.contains(path) {
+                                    break 'ignore;
+                                }
+                            }
+
                             if save_paths.is_empty() {
                                 break 'ignore;
                             }

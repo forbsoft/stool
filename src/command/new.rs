@@ -1,10 +1,10 @@
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
 
-use crate::config::game::{GameConfig, GameSavePath, GameSavePathType};
+use crate::config::game::{GameConfig, GameSaveFile, GameSavePath};
 
 pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
     let name: String = dialoguer::Input::new().with_prompt("Name").interact_text()?;
@@ -15,43 +15,43 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
         return Err(anyhow::anyhow!("Game config '{name}' already exists"));
     }
 
-    let mut save_paths: HashMap<String, GameSavePath> = HashMap::new();
+    let mut save_paths: BTreeMap<String, GameSavePath> = BTreeMap::new();
+    let mut save_files: Vec<GameSaveFile> = Vec::new();
 
     loop {
-        let name: String = dialoguer::Input::new()
-            .with_prompt("Add save path name (blank to proceed without adding)")
+        let path: String = dialoguer::Input::new()
+            .with_prompt("Save path (blank to proceed without adding)")
             .allow_empty(true)
             .interact_text()?;
 
-        if name.is_empty() {
-            if save_paths.is_empty() {
-                eprintln!("At least one save path is required.");
+        if path.is_empty() {
+            if save_paths.is_empty() && save_files.is_empty() {
+                eprintln!("At least one save path or file is required.");
                 continue;
             }
 
             break;
         }
 
-        let path: PathBuf = dialoguer::Input::<String>::new()
-            .with_prompt("Path")
-            .interact_text()?
-            .into();
+        let path: PathBuf = path.into();
 
-        let type_ = if path.is_file() {
-            GameSavePathType::File
-        } else {
-            GameSavePathType::Directory
-        };
-
-        save_paths.insert(
-            name,
-            GameSavePath {
-                type_,
+        if path.is_file() {
+            save_files.push(GameSaveFile {
                 path,
-                include: Default::default(),
-                ignore: Default::default(),
-            },
-        );
+                staging_subdirectory: None,
+            });
+        } else {
+            let name: String = dialoguer::Input::new().with_prompt("Name").interact_text()?;
+
+            save_paths.insert(
+                name,
+                GameSavePath {
+                    path,
+                    include: Default::default(),
+                    ignore: Default::default(),
+                },
+            );
+        }
     }
 
     let backup_interval: u64 = dialoguer::Input::new()
@@ -77,6 +77,7 @@ pub fn new(game_config_path: &Path) -> Result<(), anyhow::Error> {
 
     let game_config = GameConfig {
         save_paths,
+        save_files,
         backup_interval,
         grace_time,
         copy_latest_to_path,

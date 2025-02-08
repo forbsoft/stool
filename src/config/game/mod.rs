@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -7,19 +7,9 @@ use std::str::FromStr;
 use anyhow::Context;
 use serde_derive::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum GameSavePathType {
-    Directory,
-    File,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct GameSavePath {
-    #[serde(rename = "type")]
-    #[serde(default = "default_gamesavepath_type")]
-    pub type_: GameSavePathType,
     pub path: PathBuf,
     pub include: Option<Vec<String>>,
     pub ignore: Option<Vec<String>>,
@@ -27,8 +17,19 @@ pub struct GameSavePath {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
+pub struct GameSaveFile {
+    pub path: PathBuf,
+    pub staging_subdirectory: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct GameConfig {
-    pub save_paths: HashMap<String, GameSavePath>,
+    #[serde(default)]
+    pub save_paths: BTreeMap<String, GameSavePath>,
+    #[serde(default)]
+    #[serde(rename = "save-file")]
+    pub save_files: Vec<GameSaveFile>,
     pub backup_interval: u64,
     pub grace_time: u64,
     pub copy_latest_to_path: Option<PathBuf>,
@@ -67,8 +68,4 @@ impl FromStr for GameConfig {
 
         Ok(config)
     }
-}
-
-fn default_gamesavepath_type() -> GameSavePathType {
-    GameSavePathType::Directory
 }
