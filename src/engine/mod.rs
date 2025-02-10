@@ -95,22 +95,22 @@ impl Engine {
 impl EngineControl {
     /// Request shutdown of engine
     pub fn shutdown(&mut self) {
-        self.shutdown.store(true, Ordering::SeqCst);
+        self.shutdown.store(true, Ordering::Release);
     }
 
     pub fn state(&self) -> EngineState {
         self.state
-            .load(Ordering::SeqCst)
+            .load(Ordering::Acquire)
             .try_into()
             .expect("Unknown engine state")
     }
 
     pub fn get_autobackup(&self) -> bool {
-        self.autobackup.load(Ordering::SeqCst)
+        self.autobackup.load(Ordering::Relaxed)
     }
 
     pub fn set_autobackup(&self, val: bool) {
-        self.autobackup.store(val, Ordering::SeqCst);
+        self.autobackup.store(val, Ordering::Relaxed);
     }
 
     /// Request a backup operation
@@ -199,7 +199,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
         std::thread::spawn(move || {
             for backup_request in &backup_rx {
                 // Pause autobackup while executing a request
-                backup_or_restore_ongoing.store(true, Ordering::SeqCst);
+                backup_or_restore_ongoing.store(true, Ordering::Release);
 
                 let res: Result<(), anyhow::Error> = (|| {
                     match backup_request {
@@ -442,7 +442,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
                 }
 
                 // Resume autobackup after request is completed
-                backup_or_restore_ongoing.store(false, Ordering::SeqCst);
+                backup_or_restore_ongoing.store(false, Ordering::Release);
             }
 
             ui.clear().unwrap();
@@ -465,13 +465,13 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
         let mut last_autobackup_at: Option<Instant> = None;
 
         std::thread::spawn(move || loop {
-            if shutdown.load(Ordering::SeqCst) {
+            if shutdown.load(Ordering::Relaxed) {
                 break;
             }
 
             std::thread::sleep(Duration::from_secs(1));
 
-            if !autobackup.load(Ordering::SeqCst) || backup_or_restore_ongoing.load(Ordering::SeqCst) {
+            if !autobackup.load(Ordering::Acquire) || backup_or_restore_ongoing.load(Ordering::Acquire) {
                 continue;
             }
 
@@ -615,20 +615,20 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
             let _pid_lock = pid_lock;
 
             // Set engine state to Running
-            state.store(EngineState::Running as u8, Ordering::SeqCst);
+            state.store(EngineState::Running as u8, Ordering::Release);
 
-            while !shutdown.load(Ordering::SeqCst) {
+            while !shutdown.load(Ordering::Relaxed) {
                 std::thread::sleep(SLEEP_DURATION);
             }
 
             info!("Shutting down...");
 
             // Set engine state to ShuttingDown
-            state.store(EngineState::ShuttingDown as u8, Ordering::SeqCst);
+            state.store(EngineState::ShuttingDown as u8, Ordering::Release);
 
             'exit_backup: {
                 // If a backup or restore is ongoing, do not request an exit backup.
-                if backup_or_restore_ongoing.load(Ordering::SeqCst) {
+                if backup_or_restore_ongoing.load(Ordering::Acquire) {
                     break 'exit_backup;
                 }
 
@@ -681,7 +681,7 @@ pub fn run(args: EngineArgs, shutdown: Arc<AtomicBool>, mut ui: impl StoolUiHand
             }
 
             // Set engine state to ShutDown
-            state.store(EngineState::ShutDown as u8, Ordering::SeqCst);
+            state.store(EngineState::ShutDown as u8, Ordering::Release);
         })
     };
 

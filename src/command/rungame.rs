@@ -29,7 +29,7 @@ pub fn rungame(engine_args: EngineArgs, game_command: Vec<String>) -> Result<(),
 
         move || {
             info!("Shutdown requested by user.");
-            shutdown.store(true, Ordering::SeqCst);
+            shutdown.store(true, Ordering::Release);
         }
     })
     .unwrap_or_else(|err| error!("Error setting Ctrl-C handler: {}", err));
@@ -83,7 +83,7 @@ pub fn rungame(engine_args: EngineArgs, game_command: Vec<String>) -> Result<(),
                 .stderr(Stdio::null())
                 .status();
 
-            shutdown.store(true, Ordering::SeqCst);
+            shutdown.store(true, Ordering::Release);
 
             result?;
             Ok(())

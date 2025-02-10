@@ -98,7 +98,7 @@ impl App<'_> {
 
         loop {
             if !shutting_down {
-                if self.shutdown.load(Ordering::SeqCst) {
+                if self.shutdown.load(Ordering::Relaxed) {
                     self.view = View::Shutdown;
                 }
 

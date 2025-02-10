@@ -20,7 +20,7 @@ pub fn tui(engine_args: EngineArgs) -> Result<(), anyhow::Error> {
 
         move || {
             info!("Shutdown requested by user.");
-            shutdown.store(true, Ordering::SeqCst);
+            shutdown.store(true, Ordering::Release);
         }
     })
     .unwrap_or_else(|err| error!("Error setting Ctrl-C handler: {}", err));
