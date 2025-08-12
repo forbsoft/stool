@@ -32,7 +32,7 @@ jobs:
           configs: win64 win32
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Install dependencies
       run: ${{ matrix.install-deps }}
